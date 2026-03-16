@@ -21,9 +21,18 @@ pub struct EnrichOpts<'a> {
     pub dry_run: bool,
     pub concurrency: usize,
     pub json: bool,
+    pub if_available: bool,
 }
 
 pub fn run_enrich(root: &Path, opts: EnrichOpts<'_>) -> Result<()> {
+    // Early exit: --api --if-available with no API key skips all work (including DB open)
+    if opts.api
+        && opts.if_available
+        && api::resolve_provider(opts.provider, opts.api_key, opts.model).is_err()
+    {
+        return Ok(());
+    }
+
     let conn = db::open_index(root)?;
 
     if opts.stats {
@@ -59,16 +68,7 @@ pub fn run_enrich(root: &Path, opts: EnrichOpts<'_>) -> Result<()> {
     }
 
     if opts.api {
-        return run_api_enrich(
-            &conn,
-            opts.api_key,
-            opts.provider,
-            opts.model,
-            opts.top,
-            opts.force,
-            opts.dry_run,
-            opts.concurrency,
-        );
+        return run_api_enrich(&conn, &opts);
     }
 
     // No action specified — show stats by default
@@ -144,23 +144,15 @@ fn print_list(conn: &rusqlite::Connection, json: bool) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_api_enrich(
-    conn: &rusqlite::Connection,
-    api_key: Option<&str>,
-    provider_name: &str,
-    model: Option<&str>,
-    top: Option<usize>,
-    force: bool,
-    dry_run: bool,
-    concurrency: usize,
-) -> Result<()> {
-    let provider = api::resolve_provider(provider_name, api_key, model)?;
+fn run_api_enrich(conn: &rusqlite::Connection, opts: &EnrichOpts<'_>) -> Result<()> {
+    // If if_available was set, resolve_provider already succeeded in run_enrich's early check.
+    // If not set, this propagates the error with the helpful message.
+    let provider = api::resolve_provider(opts.provider, opts.api_key, opts.model)?;
 
-    let mut files = db::get_files_with_exports(conn, !force)?;
+    let mut files = db::get_files_with_exports(conn, !opts.force)?;
 
     // Limit by --top N
-    if let Some(n) = top {
+    if let Some(n) = opts.top {
         files.truncate(n);
     }
 
@@ -170,7 +162,7 @@ fn run_api_enrich(
     }
 
     // Dry run: estimate cost
-    if dry_run {
+    if opts.dry_run {
         let total_chars: usize = files.iter().map(estimate_prompt_chars).sum();
         let total_tokens_est = total_chars as f64 / 3.5;
         let output_tokens_est = files.len() as f64 * 150.0; // ~150 output tokens per file
@@ -205,12 +197,12 @@ fn run_api_enrich(
         "codemap: enriching {} files via {} (concurrency: {})...",
         total,
         provider.name(),
-        concurrency
+        opts.concurrency
     );
 
     // Build the thread pool with bounded concurrency
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(concurrency)
+        .num_threads(opts.concurrency)
         .build()?;
 
     // Collect results, then write to DB sequentially (rusqlite Connection isn't Send)

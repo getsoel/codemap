@@ -197,6 +197,10 @@ struct EnrichArgs {
     /// JSON output (for --list and --stats)
     #[arg(long)]
     json: bool,
+
+    /// Silently exit 0 if no API key is found (for hook usage)
+    #[arg(long)]
+    if_available: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -272,6 +276,7 @@ fn main() -> anyhow::Result<()> {
                     dry_run: args.dry_run,
                     concurrency: args.concurrency,
                     json: args.json,
+                    if_available: args.if_available,
                 },
             )?;
         }

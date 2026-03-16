@@ -44,8 +44,8 @@ pub fn run_setup(root: &Path, no_post_hook: bool, global: bool, dry_run: bool) -
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [{
             "type": "command",
-            "command": "codemap index --incremental",
-            "timeout": 30,
+            "command": "codemap index --incremental && codemap enrich --api --top 10 --if-available",
+            "timeout": 60,
             "async": true
         }]
     });
@@ -97,7 +97,7 @@ pub fn run_setup(root: &Path, no_post_hook: bool, global: bool, dry_run: bool) -
         std::fs::write(&config_path, pretty.as_bytes())?;
         eprintln!("✓ Wrote SessionStart hook to {}", config_path.display());
         if !no_post_hook {
-            eprintln!("✓ Wrote PostToolUse hook (async re-index on file changes)");
+            eprintln!("✓ Wrote PostToolUse hook (async re-index + enrich on file changes)");
         }
     }
 
