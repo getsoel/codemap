@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            npm_dir: codemap-darwin-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            npm_dir: codemap-darwin-arm64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            npm_dir: codemap-linux-x64-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            npm_dir: codemap-linux-arm64-gnu
+            use_cross: true
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            npm_dir: codemap-linux-x64-musl
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            npm_dir: codemap-win32-x64-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl-tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.use_cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build with cross
+        if: matrix.use_cross == true
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build with cargo
+        if: matrix.use_cross != true
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload artifact (unix)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.npm_dir }}
+          path: target/${{ matrix.target }}/release/codemap
+
+      - name: Upload artifact (windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.npm_dir }}
+          path: target/${{ matrix.target }}/release/codemap.exe
+
+  publish:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare platform packages
+        run: |
+          declare -A TARGETS=(
+            ["codemap-darwin-x64"]="codemap"
+            ["codemap-darwin-arm64"]="codemap"
+            ["codemap-linux-x64-gnu"]="codemap"
+            ["codemap-linux-arm64-gnu"]="codemap"
+            ["codemap-linux-x64-musl"]="codemap"
+            ["codemap-win32-x64-msvc"]="codemap.exe"
+          )
+
+          for dir in "${!TARGETS[@]}"; do
+            binary="${TARGETS[$dir]}"
+            src="artifacts/${dir}/${binary}"
+            dest="npm/${dir}/${binary}"
+
+            echo "Copying ${src} -> ${dest}"
+            cp "${src}" "${dest}"
+            chmod +x "${dest}"
+          done
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          DIRS=(
+            codemap-darwin-x64
+            codemap-darwin-arm64
+            codemap-linux-x64-gnu
+            codemap-linux-arm64-gnu
+            codemap-linux-x64-musl
+            codemap-win32-x64-msvc
+          )
+
+          for dir in "${DIRS[@]}"; do
+            echo "Publishing npm/${dir}..."
+            cd "npm/${dir}"
+            npm publish --access public
+            cd ../..
+          done
+
+      - name: Publish root package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

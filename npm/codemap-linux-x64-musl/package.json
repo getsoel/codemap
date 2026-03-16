@@ -1,0 +1,11 @@
+{
+  "name": "@soel/codemap-linux-x64-musl",
+  "version": "0.1.0",
+  "description": "codemap binary for Linux x64 (musl)",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "libc": ["musl"],
+  "files": ["codemap"],
+  "preferUnpacked": true
+}

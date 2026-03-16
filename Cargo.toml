@@ -1,0 +1,48 @@
+[package]
+name = "codemap"
+version = "0.1.0"
+edition = "2024"
+description = "Code intelligence for JS/TS codebases"
+license = "MIT"
+
+[[bin]]
+name = "codemap"
+path = "src/main.rs"
+
+[dependencies]
+# Parsing & semantic analysis
+oxc = { version = "0.118", features = ["full"] }
+oxc_resolver = "11.19"
+
+# CLI framework
+clap = { version = "4.5", features = ["derive"] }
+
+# Graph & ranking
+petgraph = "0.8"
+
+# Storage
+rusqlite = { version = "0.38", features = ["bundled"] }
+
+# File walking
+ignore = "0.4"
+
+# Content hashing
+blake3 = "1.8"
+
+# MCP server
+rmcp = { version = "0.16", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+# Utilities
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

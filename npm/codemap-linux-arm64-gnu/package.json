@@ -1,0 +1,11 @@
+{
+  "name": "@soel/codemap-linux-arm64-gnu",
+  "version": "0.1.0",
+  "description": "codemap binary for Linux ARM64 (glibc)",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "libc": ["glibc"],
+  "files": ["codemap"],
+  "preferUnpacked": true
+}

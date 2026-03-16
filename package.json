@@ -1,0 +1,23 @@
+{
+  "name": "@soel/codemap",
+  "version": "0.1.0",
+  "description": "Code intelligence for JS/TS codebases",
+  "license": "MIT",
+  "bin": {
+    "codemap": "scripts/run.js"
+  },
+  "files": [
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "optionalDependencies": {
+    "@soel/codemap-darwin-arm64": "0.1.0",
+    "@soel/codemap-darwin-x64": "0.1.0",
+    "@soel/codemap-linux-x64-gnu": "0.1.0",
+    "@soel/codemap-linux-arm64-gnu": "0.1.0",
+    "@soel/codemap-linux-x64-musl": "0.1.0",
+    "@soel/codemap-win32-x64-msvc": "0.1.0"
+  }
+}
