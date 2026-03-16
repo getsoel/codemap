@@ -81,7 +81,7 @@ impl GeminiProvider {
     pub fn new(api_key: String, model: Option<String>) -> Self {
         Self {
             api_key,
-            model: model.unwrap_or_else(|| "gemini-2.0-flash".to_string()),
+            model: model.unwrap_or_else(|| "gemini-2.5-flash-lite".to_string()),
             agent: build_agent(),
         }
     }
@@ -112,12 +112,38 @@ impl EnrichmentProvider for GeminiProvider {
                     },
                     "required": ["summary", "when_to_use"]
                 },
-                "maxOutputTokens": 256,
+                "maxOutputTokens": 1024,
                 "temperature": 0.2
             }
         });
 
-        let resp = retry_request_json(&self.agent, &url, &body, &[])?;
+        let resp = retry_request_json(&self.agent, &url, &body, &[], &self.model)?;
+
+        // Check for blocked prompt (no candidates at all)
+        if resp
+            .get("candidates")
+            .and_then(|c| c.as_array())
+            .is_none_or(|c| c.is_empty())
+        {
+            let block_reason = resp
+                .pointer("/promptFeedback/blockReason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            anyhow::bail!("Gemini blocked the prompt (reason: {block_reason})");
+        }
+
+        // Check finishReason before extracting text
+        let finish_reason = resp
+            .pointer("/candidates/0/finishReason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("UNKNOWN");
+        if finish_reason != "STOP" {
+            anyhow::bail!(
+                "Gemini response incomplete (finishReason: {finish_reason}). \
+                 Response may have been truncated."
+            );
+        }
+
         let text = resp
             .pointer("/candidates/0/content/parts/0/text")
             .and_then(|v| v.as_str())
@@ -189,6 +215,7 @@ impl EnrichmentProvider for AnthropicProvider {
             "https://api.anthropic.com/v1/messages",
             &body,
             &headers,
+            &self.model,
         )?;
         let content = resp
             .get("content")
@@ -210,6 +237,7 @@ fn retry_request_json(
     url: &str,
     body: &serde_json::Value,
     extra_headers: &[(&str, &str)],
+    model: &str,
 ) -> Result<serde_json::Value> {
     let max_retries = 3;
     for attempt in 0..=max_retries {
@@ -222,13 +250,21 @@ fn retry_request_json(
                 let json: serde_json::Value = resp.body_mut().read_json()?;
                 return Ok(json);
             }
-            Err(ureq::Error::StatusCode(429)) if attempt < max_retries => {
+            Err(ureq::Error::StatusCode(status @ (429 | 500 | 502 | 503)))
+                if attempt < max_retries =>
+            {
                 let delay = Duration::from_millis(500 * 2u64.pow(attempt as u32));
-                tracing::warn!("rate limited, retrying in {:?}", delay);
+                tracing::warn!("HTTP {status}, retrying in {:?}", delay);
                 thread::sleep(delay);
             }
             Err(ureq::Error::StatusCode(403)) => {
                 anyhow::bail!("API key is invalid or unauthorized (403). Check your API key.");
+            }
+            Err(ureq::Error::StatusCode(404)) => {
+                anyhow::bail!(
+                    "Model not found (404). The model '{model}' may not be available \
+                     for your API key. Try a different model with --model."
+                );
             }
             Err(ureq::Error::StatusCode(status)) => {
                 anyhow::bail!("API request failed with status {status}");

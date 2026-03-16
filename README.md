@@ -180,6 +180,16 @@ codemap integrates with Claude Code through [hooks](https://docs.anthropic.com/e
 
 Run `codemap setup` to configure these automatically.
 
+## Prompt recipes
+
+Ready-made prompt templates you can paste into Claude Code to run common analysis tasks against your indexed codebase:
+
+- [Code review](recipes/review.md) — maintainability and scalability audit
+- [Security audit](recipes/security.md) — find vulnerabilities and insecure patterns
+- [Refactoring](recipes/refactor.md) — identify complexity hotspots and coupling
+- [Test generation](recipes/tests.md) — prioritize and generate tests for untested code
+- [Onboarding](recipes/onboard.md) — generate an architectural overview for new developers
+
 ## License
 
 MIT
