@@ -3,6 +3,7 @@ use crate::{db, graph, hash, parser, resolver, types, walk};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 /// Convert an absolute path to a relative path string under `root`.
 fn to_relative(abs: &str, root: &Path) -> String {
@@ -13,7 +14,18 @@ fn to_relative(abs: &str, root: &Path) -> String {
         .to_string()
 }
 
-pub fn run_index(root: &Path, force: bool) -> Result<()> {
+/// Get file mtime as seconds since epoch, or None on error.
+fn file_mtime(path: &Path) -> Option<i64> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64)
+}
+
+pub fn run_index(root: &Path, force: bool, incremental: bool) -> Result<()> {
     // Ensure .codemap directory exists
     let codemap_dir = root.join(".codemap");
     std::fs::create_dir_all(&codemap_dir)?;
@@ -36,7 +48,6 @@ pub fn run_index(root: &Path, force: bool) -> Result<()> {
     }
 
     // Step 2: Read files, hash, and check for changes
-    // Read each file once — use the in-memory content for both hashing and parsing.
     let mut changed_files: Vec<(String, String, String, String)> = Vec::new(); // (rel_path, abs_path, hash, source)
     let mut all_paths: Vec<String> = Vec::new();
     let mut skipped = 0usize;
@@ -50,6 +61,19 @@ pub fn run_index(root: &Path, force: bool) -> Result<()> {
         let abs_path = file_path.to_string_lossy().to_string();
         all_paths.push(rel_path.clone());
 
+        // Cache mtime once (avoid redundant stat calls)
+        let fs_mtime = file_mtime(file_path);
+
+        // Incremental: skip files whose mtime hasn't changed
+        if incremental
+            && !force
+            && let (Some(db_mt), Some(fs_mt)) = (db::get_file_mtime(&conn, &rel_path), fs_mtime)
+            && fs_mt <= db_mt
+        {
+            skipped += 1;
+            continue;
+        }
+
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
@@ -59,23 +83,39 @@ pub fn run_index(root: &Path, force: bool) -> Result<()> {
         };
         let file_hash = hash::hash_bytes(source.as_bytes());
 
+        // Hash-based skip (non-incremental mode, or incremental with newer mtime)
         if !force
             && let Some(existing_hash) = db::get_file_hash(&conn, &rel_path)
             && existing_hash == file_hash
         {
+            // Mtime changed but content didn't — update mtime only
+            if let (true, Some(fs_mt)) = (incremental, fs_mtime) {
+                let _ = db::update_file_mtime(&conn, &rel_path, fs_mt);
+            }
             skipped += 1;
             continue;
         }
         changed_files.push((rel_path, abs_path, file_hash, source));
     }
 
-    let all_paths_set: HashSet<String> = all_paths.iter().cloned().collect();
+    let all_paths_set: HashSet<&str> = all_paths.iter().map(|s| s.as_str()).collect();
 
     eprintln!(
         "codemap: {} changed, {} unchanged",
         changed_files.len(),
         skipped
     );
+
+    // Early exit for incremental with no changes
+    if incremental && changed_files.is_empty() {
+        // Still delete stale files
+        let deleted = db::delete_stale_files(&conn, &all_paths)?;
+        if deleted > 0 {
+            eprintln!("codemap: removed {deleted} stale files from index");
+        }
+        eprintln!("codemap: up to date (0 changes)");
+        return Ok(());
+    }
 
     // Delete stale files no longer on disk
     let deleted = db::delete_stale_files(&conn, &all_paths)?;
@@ -121,7 +161,7 @@ pub fn run_index(root: &Path, force: bool) -> Result<()> {
                 resolver::resolve_import(&import_resolver, from_dir, &import.source)
             {
                 let resolved_rel = to_relative(&resolved, root);
-                if all_paths_set.contains(&resolved_rel) {
+                if all_paths_set.contains(resolved_rel.as_str()) {
                     let kind = if import.kind == types::ImportKind::Namespace {
                         graph::EdgeKind::TypeImport
                     } else {
@@ -147,7 +187,7 @@ pub fn run_index(root: &Path, force: bool) -> Result<()> {
                 resolver::resolve_import(&import_resolver, from_dir, &reexport.source)
             {
                 let resolved_rel = to_relative(&resolved, root);
-                if all_paths_set.contains(&resolved_rel) {
+                if all_paths_set.contains(resolved_rel.as_str()) {
                     dep_graph.add_edge(rel_path, &resolved_rel, graph::EdgeKind::ReExport);
                     resolved_edges.push((
                         resolved_rel,
@@ -181,10 +221,15 @@ pub fn run_index(root: &Path, force: bool) -> Result<()> {
     // Upsert all changed files and collect file IDs for edge insertion
     let mut file_id_cache: HashMap<String, i64> = HashMap::new();
 
-    for (rel_path, _abs_path, file_hash, _source) in &changed_files {
+    for (rel_path, abs_path, file_hash, _source) in &changed_files {
         let rank = rank_map.get(rel_path.as_str()).copied().unwrap_or(0.0);
         let file_id = db::upsert_file(&tx, rel_path, file_hash, rank)?;
         file_id_cache.insert(rel_path.clone(), file_id);
+
+        // Store mtime (stat once; file was already read so metadata should be cached by OS)
+        if let Some(mt) = file_mtime(Path::new(abs_path)) {
+            db::update_file_mtime(&tx, rel_path, mt)?;
+        }
 
         if let Some(data) = file_data.get(rel_path) {
             // Insert symbols

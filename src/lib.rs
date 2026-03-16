@@ -1,11 +1,14 @@
+pub mod context;
 pub mod db;
+pub mod deps;
 pub mod graph;
 pub mod hash;
 pub mod index;
 pub mod map;
-pub mod mcp;
 pub mod parser;
-pub mod query;
 pub mod resolver;
+pub mod scorer;
+pub mod setup;
+pub mod symbol;
 pub mod types;
 pub mod walk;

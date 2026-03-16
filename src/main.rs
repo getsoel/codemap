@@ -32,22 +32,90 @@ enum Commands {
         #[arg(short, long, default_value_t = 1500)]
         tokens: usize,
 
-        /// Format: tree, json, or signatures
-        #[arg(short, long, default_value = "tree")]
-        format: String,
+        /// Suppress the CLI instructions footer
+        #[arg(long)]
+        no_instructions: bool,
     },
 
-    /// Query symbols or files by name
-    Query {
+    /// Find where a symbol is defined and who uses it
+    Symbol {
+        /// Symbol name or pattern
         #[arg()]
         pattern: String,
 
+        /// Max results
         #[arg(short, long, default_value_t = 10)]
         limit: usize,
+
+        /// Show all references without truncation
+        #[arg(long)]
+        all: bool,
+
+        /// Exact name match only (default is substring)
+        #[arg(long)]
+        exact: bool,
+
+        /// JSON output
+        #[arg(long)]
+        json: bool,
     },
 
-    /// Start the MCP server (stdio transport)
-    Serve,
+    /// Suggest the most relevant files for a task
+    Context {
+        /// Natural language task description
+        #[arg()]
+        query: String,
+
+        /// Max results
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
+
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+
+        /// Also print file contents
+        #[arg(long)]
+        include_content: bool,
+    },
+
+    /// Configure Claude Code hooks (the only setup step needed)
+    Setup {
+        /// Skip the PostToolUse re-indexing hook
+        #[arg(long)]
+        no_post_hook: bool,
+
+        /// Write to ~/.claude/settings.json instead of project-local
+        #[arg(long)]
+        global: bool,
+
+        /// Print what would be written without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Show imports and importers of a file
+    Deps {
+        /// File path to inspect
+        #[arg()]
+        file: String,
+
+        /// Direction: imports, importers, or both
+        #[arg(short, long, default_value = "both")]
+        direction: String,
+
+        /// Traversal depth
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
+
+        /// Show all importers without truncation
+        #[arg(long)]
+        all: bool,
+
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -55,6 +123,10 @@ struct IndexArgs {
     /// Force full re-index (ignore cache)
     #[arg(long)]
     force: bool,
+
+    /// Incremental: only re-index files with newer mtime
+    #[arg(long)]
+    incremental: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -74,25 +146,58 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Index(args) => {
-            tracing::info!(root = %root.display(), force = args.force, "Indexing codebase");
-            codemap::index::run_index(&root, args.force)?;
+            tracing::info!(root = %root.display(), force = args.force, incremental = args.incremental, "Indexing codebase");
+            codemap::index::run_index(&root, args.force, args.incremental)?;
         }
-        Commands::Map { tokens, format } => {
-            tracing::info!(tokens, format, "Generating code map");
-            codemap::map::run_map(&root, tokens, &format)?;
+        Commands::Map {
+            tokens,
+            no_instructions,
+        } => {
+            tracing::info!(tokens, no_instructions, "Generating code map");
+            codemap::map::run_map(&root, tokens, no_instructions)?;
         }
-        Commands::Query { pattern, limit } => {
-            tracing::info!(pattern, limit, "Querying symbols");
-            codemap::query::run_query(&root, &pattern, limit)?;
+        Commands::Context {
+            query,
+            limit,
+            json,
+            include_content,
+        } => {
+            tracing::info!(
+                query,
+                limit,
+                json,
+                include_content,
+                "Finding relevant files"
+            );
+            codemap::context::run_context(&root, &query, limit, json, include_content)?;
         }
-        Commands::Serve => {
-            tracing::info!("Starting MCP server");
-            let db_path = root.join(".codemap/index.db");
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(codemap::mcp::run_mcp_server(
-                db_path.to_string_lossy().to_string(),
-                root,
-            ))?;
+        Commands::Symbol {
+            pattern,
+            limit,
+            all,
+            exact,
+            json,
+        } => {
+            tracing::info!(pattern, limit, all, exact, json, "Looking up symbol");
+            codemap::symbol::run_symbol(&root, &pattern, limit, all, exact, json)?;
+        }
+        Commands::Setup {
+            no_post_hook,
+            global,
+            dry_run,
+        } => {
+            tracing::info!(no_post_hook, global, dry_run, "Setting up codemap");
+            codemap::setup::run_setup(&root, no_post_hook, global, dry_run)?;
+        }
+        Commands::Deps {
+            file,
+            direction,
+            depth,
+            all,
+            json,
+        } => {
+            tracing::info!(file, direction, depth, all, json, "Inspecting deps");
+            codemap::deps::run_deps(&root, &file, &direction, depth, all, json)?;
         }
     }
 

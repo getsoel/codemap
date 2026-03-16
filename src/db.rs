@@ -1,6 +1,8 @@
 /// SQLite storage layer for codemap.
 use anyhow::Result;
 use rusqlite::{Connection, params};
+use std::collections::HashMap;
+use std::path::Path;
 
 pub fn init_db(path: &str) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -37,7 +39,32 @@ pub fn init_db(path: &str) -> Result<Connection> {
         CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
     ",
     )?;
+
+    // Migrate: add mtime column if absent (v0.2)
+    let has_mtime: bool = conn
+        .prepare("PRAGMA table_info(files)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "mtime");
+    if !has_mtime {
+        conn.execute_batch("ALTER TABLE files ADD COLUMN mtime INTEGER;")?;
+    }
+
     Ok(conn)
+}
+
+/// Open the existing index database under `root/.codemap/index.db`.
+/// Bails if the index doesn't exist yet.
+pub fn open_index(root: &Path) -> Result<Connection> {
+    let db_path = root.join(".codemap/index.db");
+    if !db_path.exists() {
+        anyhow::bail!("No index found. Run `codemap index` first.");
+    }
+    init_db(
+        db_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 database path"))?,
+    )
 }
 
 pub fn get_file_hash(conn: &Connection, path: &str) -> Option<String> {
@@ -166,16 +193,28 @@ pub struct SymbolResult {
     pub ref_count: i64,
 }
 
-pub fn query_symbols(conn: &Connection, pattern: &str, limit: usize) -> Result<Vec<SymbolResult>> {
-    let like_pattern = format!("%{pattern}%");
-    let mut stmt = conn.prepare(
+/// Query symbols by name. When `exact` is true, matches the full name;
+/// otherwise uses substring (LIKE) matching.
+pub fn query_symbols(
+    conn: &Connection,
+    pattern: &str,
+    limit: usize,
+    exact: bool,
+) -> Result<Vec<SymbolResult>> {
+    let (sql_pattern, where_clause) = if exact {
+        (pattern.to_string(), "WHERE s.name = ?1")
+    } else {
+        (format!("%{pattern}%"), "WHERE s.name LIKE ?1")
+    };
+    let sql = format!(
         "SELECT s.name, s.kind, f.path, s.line, s.is_exported, s.ref_count
          FROM symbols s JOIN files f ON s.file_id = f.id
-         WHERE s.name LIKE ?1
+         {where_clause}
          ORDER BY s.is_exported DESC, s.ref_count DESC
-         LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![like_pattern, limit as i64], |row| {
+         LIMIT ?2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![sql_pattern, limit as i64], |row| {
         Ok(SymbolResult {
             name: row.get(0)?,
             kind: row.get(1)?,
@@ -226,4 +265,89 @@ pub fn get_file_deps(conn: &Connection, file_path: &str, direction: &str) -> Res
         deps.push(row?);
     }
     Ok(deps)
+}
+
+// --- v0.2 helpers ---
+
+pub fn get_stats(conn: &Connection) -> Result<(i64, i64, i64)> {
+    let files: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+    let exports: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM symbols WHERE is_exported = 1",
+        [],
+        |r| r.get(0),
+    )?;
+    let edges: i64 = conn.query_row("SELECT COUNT(*) FROM edges", [], |r| r.get(0))?;
+    Ok((files, exports, edges))
+}
+
+pub fn get_importer_counts(conn: &Connection) -> Result<HashMap<i64, i64>> {
+    let mut stmt = conn.prepare("SELECT target_id, COUNT(*) FROM edges GROUP BY target_id")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+    let mut map = HashMap::new();
+    for row in rows {
+        let (id, count) = row?;
+        map.insert(id, count);
+    }
+    Ok(map)
+}
+
+pub struct FileWithExports {
+    pub path: String,
+    pub rank: f64,
+    pub exports: Vec<String>,
+}
+
+pub fn get_all_files_with_exports(conn: &Connection) -> Result<Vec<FileWithExports>> {
+    // Single JOIN query instead of N+1
+    let mut stmt = conn.prepare(
+        "SELECT f.path, f.rank, s.name
+         FROM files f
+         LEFT JOIN symbols s ON s.file_id = f.id AND s.is_exported = 1
+         ORDER BY f.rank DESC, f.path",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, f64>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+
+    let mut result: Vec<FileWithExports> = Vec::new();
+    for row in rows {
+        let (path, rank, export_name) = row?;
+        // Group consecutive rows by path (ORDER BY guarantees grouping)
+        if let Some(last) = result.last_mut()
+            && last.path == path
+        {
+            if let Some(name) = export_name {
+                last.exports.push(name);
+            }
+            continue;
+        }
+        result.push(FileWithExports {
+            path,
+            rank,
+            exports: export_name.into_iter().collect(),
+        });
+    }
+    Ok(result)
+}
+
+pub fn get_file_mtime(conn: &Connection, path: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT mtime FROM files WHERE path = ?1",
+        params![path],
+        |row| row.get(0),
+    )
+    .ok()
+    .flatten()
+}
+
+pub fn update_file_mtime(conn: &Connection, path: &str, mtime: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET mtime = ?1 WHERE path = ?2",
+        params![mtime, path],
+    )?;
+    Ok(())
 }

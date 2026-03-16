@@ -21,6 +21,9 @@ npm/*/codemap.exe
 # Codemap index (generated per-project)
 .codemap/
 
+# Plugins
+.soel/
+
 # Build artifacts
 dist/
 *.tgz
