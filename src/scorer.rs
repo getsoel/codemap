@@ -31,9 +31,28 @@ pub fn tokenize_query(query: &str) -> Vec<String> {
         .collect()
 }
 
+/// Check if `text` contains any keyword, adding `weight` per match.
+fn match_keywords(
+    text: &str,
+    keywords: &[String],
+    weight: f64,
+    score: &mut f64,
+    reasons: &mut Vec<String>,
+) {
+    let lower = text.to_lowercase();
+    for kw in keywords {
+        if lower.contains(kw.as_str()) {
+            *score += weight;
+            if !reasons.contains(kw) {
+                reasons.push(kw.clone());
+            }
+        }
+    }
+}
+
 pub fn score_files(
     keywords: &[String],
-    files: &[db::FileWithExports],
+    files: &[db::FileWithExportsAndEnrichment],
     conn: &rusqlite::Connection,
 ) -> Vec<ScoredFile> {
     // Phase 1: direct keyword matching
@@ -43,15 +62,13 @@ pub fn score_files(
         let mut raw_score = 0.0;
         let mut reasons: Vec<String> = Vec::new();
 
-        // Filename match: split path on / and . to get components
+        // Filename match (split path into components for finer matching)
         let path_lower = file.path.to_lowercase();
         let path_components: Vec<&str> = path_lower
             .split(['/', '.'])
             .filter(|s| !s.is_empty())
             .collect();
-
         for kw in keywords {
-            // Check if any path component contains the keyword
             if path_components
                 .iter()
                 .any(|comp| comp.contains(kw.as_str()))
@@ -75,6 +92,14 @@ pub fn score_files(
                     reasons.push(kw.clone());
                 }
             }
+        }
+
+        // Enriched metadata matches
+        if let Some(summary) = &file.summary_enriched {
+            match_keywords(summary, keywords, 3.0, &mut raw_score, &mut reasons);
+        }
+        if let Some(when) = &file.when_to_use_enriched {
+            match_keywords(when, keywords, 4.0, &mut raw_score, &mut reasons);
         }
 
         if raw_score > 0.0 {

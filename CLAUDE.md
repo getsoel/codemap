@@ -11,6 +11,9 @@ cargo fmt                      # format (runs automatically via PostToolUse hook
 cargo clippy                   # lint
 ./target/debug/codemap index   # index current project
 ./target/debug/codemap map     # print code map
+codemap enrich --list          # files needing enrichment
+codemap enrich --api           # bulk enrich via LLM API
+codemap enrich --api --dry-run # estimate cost
 ```
 
 ## Architecture
@@ -20,6 +23,9 @@ Single binary, no async runtime. All source files are in `src/` (flat module lay
 **Data flow for `codemap index`:**
 discover files (ignore crate) → hash with blake3 → skip unchanged → parse with oxc → extract imports/exports/symbols → resolve imports (oxc_resolver) → build DiGraph (petgraph) → compute PageRank → persist to SQLite (.codemap/index.db)
 
+**Data flow for `codemap enrich --api`:**
+load unenriched files from DB → build prompts (path + exports + imports) → call LLM API (Gemini/Anthropic) with bounded concurrency → parse structured JSON responses → store summary + when_to_use in SQLite
+
 **Key modules:**
 - `main.rs` — CLI entry (clap derive), dispatches to command modules
 - `index.rs` — orchestrates the full index pipeline
@@ -27,6 +33,8 @@ discover files (ignore crate) → hash with blake3 → skip unchanged → parse 
 - `symbol.rs` — symbol lookup (definitions + references)
 - `deps.rs` — import graph traversal (BFS with depth)
 - `context.rs` — keyword-based file relevance scoring + graph expansion
+- `enrich.rs` — enrich command orchestration (list, set, clear, API bulk)
+- `api.rs` — LLM provider trait + Gemini/Anthropic implementations
 - `setup.rs` — writes Claude Code hook config to settings files
 - `parser.rs` — oxc parsing, semantic analysis, signature extraction
 - `resolver.rs` — oxc_resolver for import path resolution
@@ -48,6 +56,7 @@ discover files (ignore crate) → hash with blake3 → skip unchanged → parse 
 | clap 4.5 (derive) | CLI argument parsing |
 | ignore 0.4 | File walking with gitignore support |
 | blake3 1.8 | SIMD-optimized content hashing |
+| ureq 3 | Blocking HTTP client for LLM API calls |
 
 ## Conventions
 
@@ -57,6 +66,8 @@ discover files (ignore crate) → hash with blake3 → skip unchanged → parse 
 - CLI output supports `--json` for structured output on query commands
 - Signatures truncated to 100 chars
 - Token budget: `--tokens N` where N chars ≈ N/4 tokens
+- API keys read from env vars (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`), never stored in config files
+- Enrichment is always optional — all commands work without it
 
 ## npm distribution
 

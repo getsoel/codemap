@@ -79,6 +79,9 @@ enum Commands {
         include_content: bool,
     },
 
+    /// Enrich file metadata with LLM-generated summaries
+    Enrich(EnrichArgs),
+
     /// Configure Claude Code hooks (the only setup step needed)
     Setup {
         /// Skip the PostToolUse re-indexing hook
@@ -127,6 +130,73 @@ struct IndexArgs {
     /// Incremental: only re-index files with newer mtime
     #[arg(long)]
     incremental: bool,
+}
+
+#[derive(Args, Debug)]
+struct EnrichArgs {
+    /// List files needing enrichment
+    #[arg(long)]
+    list: bool,
+
+    /// Set enrichment for a specific file
+    #[arg(long)]
+    set: Option<String>,
+
+    /// Summary text (used with --set)
+    #[arg(long)]
+    summary: Option<String>,
+
+    /// When-to-use text (used with --set)
+    #[arg(long)]
+    when_to_use: Option<String>,
+
+    /// Clear enrichment for a file
+    #[arg(long)]
+    clear: Option<String>,
+
+    /// Clear all enrichments
+    #[arg(long)]
+    clear_all: bool,
+
+    /// Show enrichment coverage stats
+    #[arg(long)]
+    stats: bool,
+
+    /// Use API for bulk enrichment
+    #[arg(long)]
+    api: bool,
+
+    /// API key (overrides env var)
+    #[arg(long)]
+    api_key: Option<String>,
+
+    /// Provider: gemini or anthropic
+    #[arg(long, default_value = "gemini")]
+    provider: String,
+
+    /// Model override
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Max files to enrich (by PageRank)
+    #[arg(long)]
+    top: Option<usize>,
+
+    /// Re-enrich all files, even already enriched ones
+    #[arg(long)]
+    force: bool,
+
+    /// Show estimated cost without making API calls
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Max parallel API requests
+    #[arg(long, default_value_t = 8)]
+    concurrency: usize,
+
+    /// JSON output (for --list and --stats)
+    #[arg(long)]
+    json: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -180,6 +250,30 @@ fn main() -> anyhow::Result<()> {
         } => {
             tracing::info!(pattern, limit, all, exact, json, "Looking up symbol");
             codemap::symbol::run_symbol(&root, &pattern, limit, all, exact, json)?;
+        }
+        Commands::Enrich(args) => {
+            tracing::info!("Running enrich command");
+            codemap::enrich::run_enrich(
+                &root,
+                codemap::enrich::EnrichOpts {
+                    list: args.list,
+                    set: args.set.as_deref(),
+                    summary: args.summary.as_deref(),
+                    when_to_use: args.when_to_use.as_deref(),
+                    clear: args.clear.as_deref(),
+                    clear_all: args.clear_all,
+                    stats: args.stats,
+                    api: args.api,
+                    api_key: args.api_key.as_deref(),
+                    provider: &args.provider,
+                    model: args.model.as_deref(),
+                    top: args.top,
+                    force: args.force,
+                    dry_run: args.dry_run,
+                    concurrency: args.concurrency,
+                    json: args.json,
+                },
+            )?;
         }
         Commands::Setup {
             no_post_hook,

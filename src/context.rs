@@ -12,7 +12,7 @@ pub fn run_context(
 ) -> Result<()> {
     let conn = db::open_index(root)?;
 
-    let files = db::get_all_files_with_exports(&conn)?;
+    let files = db::get_all_files_with_exports_and_enrichment(&conn)?;
     let keywords = scorer::tokenize_query(query);
 
     if keywords.is_empty() {

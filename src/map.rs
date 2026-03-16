@@ -6,7 +6,7 @@ use std::path::Path;
 pub fn run_map(root: &Path, tokens: usize, no_instructions: bool) -> Result<()> {
     let conn = db::open_index(root)?;
 
-    let files = db::get_ranked_files(&conn, 500)?;
+    let files = db::get_ranked_files_with_enrichment(&conn, 500)?;
     if files.is_empty() {
         eprintln!("codemap: index is empty");
         return Ok(());
@@ -21,7 +21,7 @@ pub fn run_map(root: &Path, tokens: usize, no_instructions: bool) -> Result<()> 
 pub fn generate_map(
     root: &Path,
     conn: &rusqlite::Connection,
-    files: &[db::RankedFile],
+    files: &[db::RankedFileWithEnrichment],
     tokens: usize,
     with_instructions: bool,
 ) -> Result<String> {
@@ -78,6 +78,12 @@ pub fn generate_map(
             "{} [rank: {:.2} | {} importers]\n",
             file.path, file.rank, importers
         );
+        if let Some(summary) = &file.summary_enriched {
+            entry.push_str(&format!("  {summary}\n"));
+        }
+        if let Some(when) = &file.when_to_use_enriched {
+            entry.push_str(&format!("  Use when: {when}\n"));
+        }
         for sig in &signatures {
             entry.push_str(&format!("  {sig}\n"));
         }

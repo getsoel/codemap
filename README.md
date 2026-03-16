@@ -107,6 +107,23 @@ codemap context "add OAuth Google login" --include-content  # include file conte
 codemap context "fix auth bug" --limit 5 --json
 ```
 
+### `codemap enrich`
+
+Enrich file metadata with LLM-generated summaries. Improves `codemap context` recall and adds semantic descriptions to `codemap map` output.
+
+```bash
+codemap enrich --list              # show files needing enrichment
+codemap enrich --stats             # enrichment coverage
+codemap enrich --api               # bulk enrich via Gemini (needs GEMINI_API_KEY)
+codemap enrich --api --dry-run     # estimate cost without calling API
+codemap enrich --api --top 50      # enrich top 50 files by PageRank
+codemap enrich --api --provider anthropic  # use Anthropic instead of Gemini
+codemap enrich --set src/auth.ts \
+  --summary "..." --when-to-use "..."  # manual enrichment
+```
+
+Supported providers: Gemini (default, `GEMINI_API_KEY`), Anthropic (`ANTHROPIC_API_KEY`).
+
 ## Global flags
 
 ```
@@ -137,6 +154,18 @@ build/
 *.min.js
 __tests__/
 ```
+
+### Enrichment
+
+codemap works fully offline with heuristic metadata. For richer semantic descriptions, set an API key:
+
+```bash
+export GEMINI_API_KEY=your-key      # Gemini Flash (cheapest, has free tier)
+export ANTHROPIC_API_KEY=your-key   # Claude Haiku (alternative)
+codemap enrich --api
+```
+
+Enrichment is incremental — only files whose content changed since last enrichment are re-processed.
 
 ### `.codemap/`
 

@@ -36,6 +36,9 @@ serde_json = "1"
 # Parallelism
 rayon = "1.10"
 
+# HTTP client (blocking, lightweight — no async runtime)
+ureq = { version = "3", features = ["json"] }
+
 # Utilities
 anyhow = "1"
 tracing = "0.1"

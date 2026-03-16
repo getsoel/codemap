@@ -41,13 +41,23 @@ pub fn init_db(path: &str) -> Result<Connection> {
     )?;
 
     // Migrate: add mtime column if absent (v0.2)
-    let has_mtime: bool = conn
+    let columns: Vec<String> = conn
         .prepare("PRAGMA table_info(files)")?
         .query_map([], |row| row.get::<_, String>(1))?
         .filter_map(|r| r.ok())
-        .any(|name| name == "mtime");
-    if !has_mtime {
+        .collect();
+
+    if !columns.iter().any(|n| n == "mtime") {
         conn.execute_batch("ALTER TABLE files ADD COLUMN mtime INTEGER;")?;
+    }
+
+    // Migrate: add enrichment columns if absent (v0.3)
+    if !columns.iter().any(|n| n == "summary_enriched") {
+        conn.execute_batch(
+            "ALTER TABLE files ADD COLUMN summary_enriched TEXT;
+             ALTER TABLE files ADD COLUMN when_to_use_enriched TEXT;
+             ALTER TABLE files ADD COLUMN enriched_at INTEGER;",
+        )?;
     }
 
     Ok(conn)
@@ -88,7 +98,10 @@ pub fn get_file_id(conn: &Connection, path: &str) -> Option<i64> {
 pub fn upsert_file(conn: &Connection, path: &str, hash: &str, rank: f64) -> Result<i64> {
     conn.execute(
         "INSERT INTO files (path, hash, rank) VALUES (?1, ?2, ?3)
-         ON CONFLICT(path) DO UPDATE SET hash = ?2, rank = ?3, updated_at = unixepoch()",
+         ON CONFLICT(path) DO UPDATE SET hash = ?2, rank = ?3, updated_at = unixepoch(),
+         summary_enriched = CASE WHEN hash != ?2 THEN NULL ELSE summary_enriched END,
+         when_to_use_enriched = CASE WHEN hash != ?2 THEN NULL ELSE when_to_use_enriched END,
+         enriched_at = CASE WHEN hash != ?2 THEN NULL ELSE enriched_at END",
         params![path, hash, rank],
     )?;
     let id = conn.query_row(
@@ -160,28 +173,6 @@ pub fn update_ranks(conn: &Connection, ranks: &[(String, f64)]) -> Result<()> {
         stmt.execute(params![rank, path])?;
     }
     Ok(())
-}
-
-pub struct RankedFile {
-    pub id: i64,
-    pub path: String,
-    pub rank: f64,
-}
-
-pub fn get_ranked_files(conn: &Connection, limit: usize) -> Result<Vec<RankedFile>> {
-    let mut stmt = conn.prepare("SELECT id, path, rank FROM files ORDER BY rank DESC LIMIT ?1")?;
-    let rows = stmt.query_map(params![limit as i64], |row| {
-        Ok(RankedFile {
-            id: row.get(0)?,
-            path: row.get(1)?,
-            rank: row.get(2)?,
-        })
-    })?;
-    let mut files = Vec::new();
-    for row in rows {
-        files.push(row?);
-    }
-    Ok(files)
 }
 
 pub struct SymbolResult {
@@ -297,14 +288,23 @@ pub struct FileWithExports {
     pub exports: Vec<String>,
 }
 
-pub fn get_all_files_with_exports(conn: &Connection) -> Result<Vec<FileWithExports>> {
-    // Single JOIN query instead of N+1
-    let mut stmt = conn.prepare(
+pub fn get_files_with_exports(
+    conn: &Connection,
+    unenriched_only: bool,
+) -> Result<Vec<FileWithExports>> {
+    let where_clause = if unenriched_only {
+        "WHERE f.summary_enriched IS NULL"
+    } else {
+        ""
+    };
+    let sql = format!(
         "SELECT f.path, f.rank, s.name
          FROM files f
          LEFT JOIN symbols s ON s.file_id = f.id AND s.is_exported = 1
-         ORDER BY f.rank DESC, f.path",
-    )?;
+         {where_clause}
+         ORDER BY f.rank DESC, f.path"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -350,4 +350,139 @@ pub fn update_file_mtime(conn: &Connection, path: &str, mtime: i64) -> Result<()
         params![mtime, path],
     )?;
     Ok(())
+}
+
+// --- Enrichment ---
+
+pub fn set_enrichment(
+    conn: &Connection,
+    path: &str,
+    summary: &str,
+    when_to_use: &str,
+) -> Result<()> {
+    let updated = conn.execute(
+        "UPDATE files SET summary_enriched = ?1, when_to_use_enriched = ?2, enriched_at = unixepoch() WHERE path = ?3",
+        params![summary, when_to_use, path],
+    )?;
+    if updated == 0 {
+        anyhow::bail!("File not found in index: {path}");
+    }
+    Ok(())
+}
+
+pub fn clear_enrichment(conn: &Connection, path: &str) -> Result<()> {
+    let updated = conn.execute(
+        "UPDATE files SET summary_enriched = NULL, when_to_use_enriched = NULL, enriched_at = NULL WHERE path = ?1",
+        params![path],
+    )?;
+    if updated == 0 {
+        anyhow::bail!("File not found in index: {path}");
+    }
+    Ok(())
+}
+
+pub fn clear_all_enrichments(conn: &Connection) -> Result<usize> {
+    let updated = conn.execute(
+        "UPDATE files SET summary_enriched = NULL, when_to_use_enriched = NULL, enriched_at = NULL WHERE summary_enriched IS NOT NULL",
+        [],
+    )?;
+    Ok(updated)
+}
+
+pub struct EnrichmentStats {
+    pub total_files: i64,
+    pub enriched_files: i64,
+}
+
+pub fn get_enrichment_stats(conn: &Connection) -> Result<EnrichmentStats> {
+    let total_files: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+    let enriched_files: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM files WHERE summary_enriched IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(EnrichmentStats {
+        total_files,
+        enriched_files,
+    })
+}
+
+pub struct RankedFileWithEnrichment {
+    pub id: i64,
+    pub path: String,
+    pub rank: f64,
+    pub summary_enriched: Option<String>,
+    pub when_to_use_enriched: Option<String>,
+}
+
+pub fn get_ranked_files_with_enrichment(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<RankedFileWithEnrichment>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, rank, summary_enriched, when_to_use_enriched FROM files ORDER BY rank DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |row| {
+        Ok(RankedFileWithEnrichment {
+            id: row.get(0)?,
+            path: row.get(1)?,
+            rank: row.get(2)?,
+            summary_enriched: row.get(3)?,
+            when_to_use_enriched: row.get(4)?,
+        })
+    })?;
+    let mut files = Vec::new();
+    for row in rows {
+        files.push(row?);
+    }
+    Ok(files)
+}
+
+pub struct FileWithExportsAndEnrichment {
+    pub path: String,
+    pub rank: f64,
+    pub exports: Vec<String>,
+    pub summary_enriched: Option<String>,
+    pub when_to_use_enriched: Option<String>,
+}
+
+pub fn get_all_files_with_exports_and_enrichment(
+    conn: &Connection,
+) -> Result<Vec<FileWithExportsAndEnrichment>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.path, f.rank, s.name, f.summary_enriched, f.when_to_use_enriched
+         FROM files f
+         LEFT JOIN symbols s ON s.file_id = f.id AND s.is_exported = 1
+         ORDER BY f.rank DESC, f.path",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, f64>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    })?;
+
+    let mut result: Vec<FileWithExportsAndEnrichment> = Vec::new();
+    for row in rows {
+        let (path, rank, export_name, summary, when_to_use) = row?;
+        if let Some(last) = result.last_mut()
+            && last.path == path
+        {
+            if let Some(name) = export_name {
+                last.exports.push(name);
+            }
+            continue;
+        }
+        result.push(FileWithExportsAndEnrichment {
+            path,
+            rank,
+            exports: export_name.into_iter().collect(),
+            summary_enriched: summary,
+            when_to_use_enriched: when_to_use,
+        });
+    }
+    Ok(result)
 }

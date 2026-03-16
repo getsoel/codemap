@@ -1,6 +1,8 @@
+pub mod api;
 pub mod context;
 pub mod db;
 pub mod deps;
+pub mod enrich;
 pub mod graph;
 pub mod hash;
 pub mod index;
