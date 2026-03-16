@@ -17,6 +17,9 @@ pub fn run_index(root: &Path, force: bool) -> Result<()> {
     // Ensure .codemap directory exists
     let codemap_dir = root.join(".codemap");
     std::fs::create_dir_all(&codemap_dir)?;
+
+    // Warn if .codemap/ isn't gitignored
+    warn_if_not_gitignored(root);
     let db_path = codemap_dir.join("index.db");
     let db_path_str = db_path
         .to_str()
@@ -250,4 +253,35 @@ pub fn run_index(root: &Path, force: bool) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Check if `.codemap/` is covered by the project's `.gitignore`. Warn once if not.
+fn warn_if_not_gitignored(root: &Path) {
+    let gitignore_path = root.join(".gitignore");
+    let contents = match std::fs::read_to_string(&gitignore_path) {
+        Ok(s) => s,
+        Err(_) => {
+            // No .gitignore at all — warn
+            eprintln!(
+                "codemap: warning: .codemap/ is not in .gitignore — \
+                 consider adding it to avoid committing the index database"
+            );
+            return;
+        }
+    };
+
+    let dominated = contents.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed == ".codemap"
+            || trimmed == ".codemap/"
+            || trimmed == "/.codemap"
+            || trimmed == "/.codemap/"
+    });
+
+    if !dominated {
+        eprintln!(
+            "codemap: warning: .codemap/ is not in .gitignore — \
+             consider adding it to avoid committing the index database"
+        );
+    }
 }

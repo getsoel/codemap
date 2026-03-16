@@ -18,6 +18,9 @@ npm/*/codemap.exe
 .vscode/
 *.iml
 
+# Codemap index (generated per-project)
+.codemap/
+
 # Build artifacts
 dist/
 *.tgz
