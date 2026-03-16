@@ -27,3 +27,6 @@ npm/*/codemap.exe
 # Build artifacts
 dist/
 *.tgz
+
+# Docs
+docs/
