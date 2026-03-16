@@ -3,7 +3,7 @@ use petgraph::algo::page_rank;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum EdgeKind {
     Import,
     ReExport,

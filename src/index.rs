@@ -1,6 +1,7 @@
 /// Index command: discover, parse, resolve, graph, rank, persist.
 use crate::{db, graph, hash, parser, resolver, types, walk};
 use anyhow::Result;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -123,88 +124,84 @@ pub fn run_index(root: &Path, force: bool, incremental: bool) -> Result<()> {
         eprintln!("codemap: removed {deleted} stale files from index");
     }
 
-    // Step 3: Parse changed files and collect analyses + resolved edges (single pass)
+    // Step 3: Parse changed files in parallel, then build graph sequentially
     let import_resolver = resolver::create_resolver();
-    let mut dep_graph = graph::DependencyGraph::new();
-    let mut parse_errors = 0usize;
 
-    // Per-file data collected in one pass: analysis + resolved edges
     struct FileData {
         analysis: types::FileAnalysis,
-        /// (resolved_rel_path, edge_type_str, specifier)
-        resolved_edges: Vec<(String, String, String)>,
+        /// (resolved_rel_path, edge_kind, specifier)
+        resolved_edges: Vec<(String, graph::EdgeKind, String)>,
     }
+
+    // Parallel: parse + resolve imports (CPU-heavy work)
+    let parse_results: Vec<Option<(String, FileData)>> = changed_files
+        .par_iter()
+        .map(|(rel_path, abs_path, _hash, source)| {
+            let analysis = match parser::analyze_file(Path::new(abs_path), source) {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!("Failed to parse {}: {}", rel_path, e);
+                    return None;
+                }
+            };
+
+            let from_dir = Path::new(abs_path).parent().unwrap_or(Path::new("."));
+            let mut resolved_edges = Vec::new();
+
+            for import in &analysis.imports {
+                if let Some(resolved) =
+                    resolver::resolve_import(&import_resolver, from_dir, &import.source)
+                {
+                    let resolved_rel = to_relative(&resolved, root);
+                    if all_paths_set.contains(resolved_rel.as_str()) {
+                        let kind = match import.kind {
+                            types::ImportKind::Namespace => graph::EdgeKind::TypeImport,
+                            _ => graph::EdgeKind::Import,
+                        };
+                        resolved_edges.push((resolved_rel, kind, import.source.clone()));
+                    }
+                }
+            }
+
+            for reexport in &analysis.reexports {
+                if let Some(resolved) =
+                    resolver::resolve_import(&import_resolver, from_dir, &reexport.source)
+                {
+                    let resolved_rel = to_relative(&resolved, root);
+                    if all_paths_set.contains(resolved_rel.as_str()) {
+                        resolved_edges.push((
+                            resolved_rel,
+                            graph::EdgeKind::ReExport,
+                            reexport.source.clone(),
+                        ));
+                    }
+                }
+            }
+
+            Some((
+                rel_path.clone(),
+                FileData {
+                    analysis,
+                    resolved_edges,
+                },
+            ))
+        })
+        .collect();
+
+    // Sequential: build graph from parallel results
+    let parse_errors = parse_results.iter().filter(|r| r.is_none()).count();
+    let mut dep_graph = graph::DependencyGraph::new();
     let mut file_data: HashMap<String, FileData> = HashMap::new();
 
-    // Add all known files to graph first
     for path in &all_paths {
         dep_graph.add_file(path);
     }
 
-    for (rel_path, abs_path, _hash, source) in &changed_files {
-        let analysis = match parser::analyze_file(Path::new(abs_path), source) {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::warn!("Failed to parse {}: {}", rel_path, e);
-                parse_errors += 1;
-                continue;
-            }
-        };
-
-        let from_dir = Path::new(abs_path).parent().unwrap_or(Path::new("."));
-
-        let mut resolved_edges = Vec::new();
-
-        // Resolve imports once — build graph edges and cache for DB insertion
-        for import in &analysis.imports {
-            if let Some(resolved) =
-                resolver::resolve_import(&import_resolver, from_dir, &import.source)
-            {
-                let resolved_rel = to_relative(&resolved, root);
-                if all_paths_set.contains(resolved_rel.as_str()) {
-                    let kind = if import.kind == types::ImportKind::Namespace {
-                        graph::EdgeKind::TypeImport
-                    } else {
-                        graph::EdgeKind::Import
-                    };
-                    dep_graph.add_edge(rel_path, &resolved_rel, kind);
-
-                    let edge_type = match import.kind {
-                        types::ImportKind::Namespace => "TypeImport",
-                        _ => "Import",
-                    };
-                    resolved_edges.push((
-                        resolved_rel,
-                        edge_type.to_string(),
-                        import.source.clone(),
-                    ));
-                }
-            }
+    for (rel_path, data) in parse_results.into_iter().flatten() {
+        for (resolved_rel, kind, _specifier) in &data.resolved_edges {
+            dep_graph.add_edge(&rel_path, resolved_rel, *kind);
         }
-
-        for reexport in &analysis.reexports {
-            if let Some(resolved) =
-                resolver::resolve_import(&import_resolver, from_dir, &reexport.source)
-            {
-                let resolved_rel = to_relative(&resolved, root);
-                if all_paths_set.contains(resolved_rel.as_str()) {
-                    dep_graph.add_edge(rel_path, &resolved_rel, graph::EdgeKind::ReExport);
-                    resolved_edges.push((
-                        resolved_rel,
-                        "ReExport".to_string(),
-                        reexport.source.clone(),
-                    ));
-                }
-            }
-        }
-
-        file_data.insert(
-            rel_path.clone(),
-            FileData {
-                analysis,
-                resolved_edges,
-            },
-        );
+        file_data.insert(rel_path, data);
     }
 
     if parse_errors > 0 {
@@ -275,10 +272,10 @@ pub fn run_index(root: &Path, force: bool, incremental: bool) -> Result<()> {
             let edges: Vec<(i64, String, Option<String>)> = data
                 .resolved_edges
                 .iter()
-                .filter_map(|(resolved_rel, edge_type, specifier)| {
+                .filter_map(|(resolved_rel, kind, specifier)| {
                     file_id_cache
                         .get(resolved_rel)
-                        .map(|&target_id| (target_id, edge_type.clone(), Some(specifier.clone())))
+                        .map(|&target_id| (target_id, format!("{kind:?}"), Some(specifier.clone())))
                 })
                 .collect();
             db::insert_edges(&tx, *source_file_id, &edges)?;
