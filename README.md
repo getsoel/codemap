@@ -1,6 +1,6 @@
 # codemap
 
-Code intelligence for JS/TS codebases. Parses your project, builds a dependency graph, ranks files by structural importance (PageRank), and gives Claude Code a map of your codebase on every session start.
+Code intelligence for JS/TS codebases. Parses your project, builds a dependency graph, ranks files by structural importance (PageRank), and gives Claude Code a ranked code map on every session start. Optional LLM enrichment adds per-file summaries and "when to use" descriptions.
 
 ## Install
 
@@ -132,6 +132,8 @@ Supported providers: Gemini (default, `GEMINI_API_KEY`), Anthropic (`ANTHROPIC_A
 ```
 
 ## How it works
+
+Inspired by [jeremychone's approach](https://news.ycombinator.com/item?id=47378360) of building per-file code maps with semantic summaries for precise AI context selection:
 
 1. **Discover** JS/TS files using the [ignore](https://crates.io/crates/ignore) crate (respects `.gitignore` and `.codemapignore`)
 2. **Parse** with [oxc](https://oxc.rs) — extract imports, exports, and top-level symbols
