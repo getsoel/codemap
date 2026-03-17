@@ -44,10 +44,10 @@ pub fn generate_map(
     // Instructions footer (reserve space if enabled)
     let instructions = if with_instructions {
         "\n## Codemap Commands\n\
-         Run these in Bash for deeper codebase queries:\n\
-         - `codemap deps <file>` — imports and importers of a file\n\
+         Try these first for structural codebase queries; fall back to Grep/Glob as needed:\n\
+         - `codemap context \"<task>\"` — find the most relevant files for a task (start here)\n\
          - `codemap symbol <name>` — find where a symbol is defined and who uses it\n\
-         - `codemap context \"<task>\"` — suggest the most relevant files for a task\n\
+         - `codemap deps <file>` — imports and importers of a file\n\
          - `codemap map --tokens 3000` — regenerate this map with a larger budget\n"
     } else {
         ""

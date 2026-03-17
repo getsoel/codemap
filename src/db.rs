@@ -415,6 +415,28 @@ pub struct RankedFileWithEnrichment {
     pub when_to_use_enriched: Option<String>,
 }
 
+/// Load all edges with resolved source/target paths.
+pub fn get_all_edges_with_paths(conn: &Connection) -> Result<Vec<(String, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT sf.path, tf.path, e.edge_type
+         FROM edges e
+         JOIN files sf ON e.source_id = sf.id
+         JOIN files tf ON e.target_id = tf.id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut edges = Vec::new();
+    for row in rows {
+        edges.push(row?);
+    }
+    Ok(edges)
+}
+
 /// Create an in-memory database for testing.
 #[cfg(test)]
 pub fn init_test_db() -> Result<Connection> {

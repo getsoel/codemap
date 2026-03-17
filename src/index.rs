@@ -107,8 +107,8 @@ pub fn run_index(root: &Path, force: bool, incremental: bool) -> Result<()> {
         skipped
     );
 
-    // Early exit for incremental with no changes
-    if incremental && changed_files.is_empty() {
+    // Early exit when nothing changed
+    if changed_files.is_empty() {
         // Still delete stale files
         let deleted = db::delete_stale_files(&conn, &all_paths)?;
         if deleted > 0 {
@@ -202,6 +202,25 @@ pub fn run_index(root: &Path, force: bool, incremental: bool) -> Result<()> {
             dep_graph.add_edge(&rel_path, resolved_rel, *kind);
         }
         file_data.insert(rel_path, data);
+    }
+
+    // Load DB edges for unchanged files so PageRank sees the full edge set
+    if changed_files.len() < all_paths.len() {
+        let changed_set: HashSet<&str> = changed_files
+            .iter()
+            .map(|(p, _, _, _)| p.as_str())
+            .collect();
+        let db_edges = db::get_all_edges_with_paths(&conn)?;
+        for (source, target, edge_type) in &db_edges {
+            if !changed_set.contains(source.as_str()) {
+                let kind = match edge_type.as_str() {
+                    "ReExport" => graph::EdgeKind::ReExport,
+                    "TypeImport" => graph::EdgeKind::TypeImport,
+                    _ => graph::EdgeKind::Import,
+                };
+                dep_graph.add_edge(source, target, kind);
+            }
+        }
     }
 
     if parse_errors > 0 {

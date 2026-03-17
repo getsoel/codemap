@@ -42,13 +42,15 @@ impl DependencyGraph {
         self.graph.add_edge(from_idx, to_idx, kind);
     }
 
-    /// Standard PageRank — damping 0.85, 100 iterations
+    /// Standard PageRank — damping 0.85, 100 iterations.
+    /// Scores are N-relative (multiplied by node count) so the average is ~1.0.
     pub fn compute_ranks(&self) -> Vec<(String, f64)> {
         let scores = page_rank(&self.graph, 0.85_f64, 100);
+        let n = self.graph.node_count() as f64;
         let mut ranked: Vec<(String, f64)> = self
             .graph
             .node_indices()
-            .map(|idx| (self.graph[idx].clone(), scores[idx.index()]))
+            .map(|idx| (self.graph[idx].clone(), scores[idx.index()] * n))
             .collect();
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         ranked
