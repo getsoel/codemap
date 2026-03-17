@@ -191,8 +191,12 @@ struct EnrichArgs {
     dry_run: bool,
 
     /// Max parallel API requests
-    #[arg(long, default_value_t = 8)]
+    #[arg(long, default_value_t = 4)]
     concurrency: usize,
+
+    /// Use Gemini batch API (50% cost, Gemini only)
+    #[arg(long)]
+    batch: bool,
 
     /// JSON output (for --list and --stats)
     #[arg(long)]
@@ -275,6 +279,7 @@ fn main() -> anyhow::Result<()> {
                     force: args.force,
                     dry_run: args.dry_run,
                     concurrency: args.concurrency,
+                    batch: args.batch,
                     json: args.json,
                     if_available: args.if_available,
                 },

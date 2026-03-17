@@ -2,7 +2,9 @@
 use crate::{api, db};
 use anyhow::Result;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 pub struct EnrichOpts<'a> {
     pub list: bool,
@@ -20,6 +22,7 @@ pub struct EnrichOpts<'a> {
     pub force: bool,
     pub dry_run: bool,
     pub concurrency: usize,
+    pub batch: bool,
     pub json: bool,
     pub if_available: bool,
 }
@@ -166,18 +169,25 @@ fn run_api_enrich(conn: &rusqlite::Connection, opts: &EnrichOpts<'_>) -> Result<
         let total_chars: usize = files.iter().map(estimate_prompt_chars).sum();
         let total_tokens_est = total_chars as f64 / 3.5;
         let output_tokens_est = files.len() as f64 * 150.0; // ~150 output tokens per file
+        let cost_multiplier = if opts.batch { 0.5 } else { 1.0 };
 
         println!(
-            "Dry run — {} provider, {} files",
+            "Dry run — {} provider, {} files{}",
             provider.name(),
-            files.len()
+            files.len(),
+            if opts.batch {
+                " (batch mode, 50% cost)"
+            } else {
+                ""
+            }
         );
         println!("Estimated input tokens:  {:.0}", total_tokens_est);
         println!("Estimated output tokens: {:.0}", output_tokens_est);
 
         match provider.name() {
             "gemini" => {
-                let cost = (total_tokens_est * 0.10 + output_tokens_est * 0.40) / 1_000_000.0;
+                let cost = (total_tokens_est * 0.10 + output_tokens_est * 0.40) / 1_000_000.0
+                    * cost_multiplier;
                 println!("Estimated cost: ${cost:.4} (Gemini Flash pricing)");
             }
             "anthropic" => {
@@ -190,8 +200,16 @@ fn run_api_enrich(conn: &rusqlite::Connection, opts: &EnrichOpts<'_>) -> Result<
         return Ok(());
     }
 
+    // Batch mode: use Gemini batch API
+    if opts.batch {
+        return run_batch_enrich(conn, opts, &files);
+    }
+
     let total = files.len();
     let enriched_count = AtomicUsize::new(0);
+
+    // Rate limiter: 200ms between requests (~5 RPS)
+    let rate_limiter = Arc::new(api::RateLimiter::new(Duration::from_millis(200)));
 
     eprintln!(
         "codemap: enriching {} files via {} (concurrency: {})...",
@@ -211,13 +229,9 @@ fn run_api_enrich(conn: &rusqlite::Connection, opts: &EnrichOpts<'_>) -> Result<
         files
             .par_iter()
             .map(|file| {
-                let req = api::EnrichmentRequest {
-                    file_path: file.path.clone(),
-                    language: api::detect_language(&file.path).to_string(),
-                    imports: Vec::new(),
-                    exports: file.exports.clone(),
-                };
+                let req = file_to_request(file);
 
+                rate_limiter.wait();
                 let result = provider.enrich(&req);
 
                 let done = enriched_count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -231,7 +245,44 @@ fn run_api_enrich(conn: &rusqlite::Connection, opts: &EnrichOpts<'_>) -> Result<
             .collect()
     });
 
-    // Write results to DB in a single transaction for performance
+    write_results_to_db(conn, results)
+}
+
+fn file_to_request(f: &db::FileWithExports) -> api::EnrichmentRequest {
+    api::EnrichmentRequest {
+        file_path: f.path.clone(),
+        language: api::detect_language(&f.path).to_string(),
+        imports: Vec::new(),
+        exports: f.exports.clone(),
+    }
+}
+
+fn run_batch_enrich(
+    conn: &rusqlite::Connection,
+    opts: &EnrichOpts<'_>,
+    files: &[db::FileWithExports],
+) -> Result<()> {
+    if opts.provider != "gemini" {
+        anyhow::bail!("--batch is only supported with the Gemini provider");
+    }
+
+    let gemini = api::resolve_gemini_provider(opts.api_key, opts.model)?;
+
+    eprintln!(
+        "codemap: batch enriching {} files via Gemini batch API...",
+        files.len()
+    );
+
+    let reqs: Vec<api::EnrichmentRequest> = files.iter().map(file_to_request).collect();
+
+    let results = gemini.batch_enrich(&reqs, 100);
+    write_results_to_db(conn, results)
+}
+
+fn write_results_to_db(
+    conn: &rusqlite::Connection,
+    results: Vec<(String, Result<api::EnrichmentResult>)>,
+) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     let mut success = 0usize;
     let mut failed = 0usize;
