@@ -54,3 +54,73 @@ impl DependencyGraph {
         ranked
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_file_is_idempotent() {
+        let mut g = DependencyGraph::new();
+        let idx1 = g.add_file("a.ts");
+        let idx2 = g.add_file("a.ts");
+        assert_eq!(idx1, idx2);
+        assert_eq!(g.graph.node_count(), 1);
+    }
+
+    #[test]
+    fn add_edge_creates_nodes_and_edge() {
+        let mut g = DependencyGraph::new();
+        g.add_edge("a.ts", "b.ts", EdgeKind::Import);
+        assert_eq!(g.graph.node_count(), 2);
+        assert_eq!(g.graph.edge_count(), 1);
+    }
+
+    #[test]
+    fn compute_ranks_single_node() {
+        let mut g = DependencyGraph::new();
+        g.add_file("a.ts");
+        let ranks = g.compute_ranks();
+        assert_eq!(ranks.len(), 1);
+        assert!(ranks[0].1 > 0.0);
+    }
+
+    #[test]
+    fn compute_ranks_star_topology() {
+        // Many nodes importing one central node — center should rank highest
+        let mut g = DependencyGraph::new();
+        for i in 0..5 {
+            g.add_edge(&format!("leaf{i}.ts"), "center.ts", EdgeKind::Import);
+        }
+        let ranks = g.compute_ranks();
+        assert_eq!(ranks[0].0, "center.ts");
+    }
+
+    #[test]
+    fn compute_ranks_chain() {
+        // a -> b -> c: c should rank highest (most transitively imported)
+        let mut g = DependencyGraph::new();
+        g.add_edge("a.ts", "b.ts", EdgeKind::Import);
+        g.add_edge("b.ts", "c.ts", EdgeKind::Import);
+        let ranks = g.compute_ranks();
+        assert_eq!(ranks[0].0, "c.ts");
+    }
+
+    #[test]
+    fn compute_ranks_disconnected_equal() {
+        let mut g = DependencyGraph::new();
+        g.add_file("a.ts");
+        g.add_file("b.ts");
+        let ranks = g.compute_ranks();
+        assert_eq!(ranks.len(), 2);
+        // Disconnected nodes should have equal rank
+        assert!((ranks[0].1 - ranks[1].1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn empty_graph() {
+        let g = DependencyGraph::new();
+        let ranks = g.compute_ranks();
+        assert!(ranks.is_empty());
+    }
+}

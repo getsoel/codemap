@@ -415,6 +415,12 @@ pub struct RankedFileWithEnrichment {
     pub when_to_use_enriched: Option<String>,
 }
 
+/// Create an in-memory database for testing.
+#[cfg(test)]
+pub fn init_test_db() -> Result<Connection> {
+    init_db(":memory:")
+}
+
 pub fn get_ranked_files_with_enrichment(
     conn: &Connection,
     limit: usize,
@@ -485,4 +491,428 @@ pub fn get_all_files_with_exports_and_enrichment(
         });
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup() -> Connection {
+        init_test_db().unwrap()
+    }
+
+    // --- init_db ---
+
+    #[test]
+    fn init_creates_tables() {
+        let conn = setup();
+        let files: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .unwrap();
+        let symbols: i64 = conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))
+            .unwrap();
+        let edges: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(files, 0);
+        assert_eq!(symbols, 0);
+        assert_eq!(edges, 0);
+    }
+
+    #[test]
+    fn init_has_enrichment_columns() {
+        let conn = setup();
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(files)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(columns.contains(&"summary_enriched".to_string()));
+        assert!(columns.contains(&"when_to_use_enriched".to_string()));
+        assert!(columns.contains(&"enriched_at".to_string()));
+        assert!(columns.contains(&"mtime".to_string()));
+    }
+
+    // --- upsert_file ---
+
+    #[test]
+    fn upsert_inserts_new_file() {
+        let conn = setup();
+        let id = upsert_file(&conn, "src/foo.ts", "abc123", 0.5).unwrap();
+        assert!(id > 0);
+        assert_eq!(get_file_hash(&conn, "src/foo.ts").unwrap(), "abc123");
+    }
+
+    #[test]
+    fn upsert_updates_existing_file() {
+        let conn = setup();
+        let id1 = upsert_file(&conn, "src/foo.ts", "abc123", 0.5).unwrap();
+        let id2 = upsert_file(&conn, "src/foo.ts", "def456", 0.8).unwrap();
+        assert_eq!(id1, id2);
+        assert_eq!(get_file_hash(&conn, "src/foo.ts").unwrap(), "def456");
+    }
+
+    #[test]
+    fn upsert_clears_enrichment_on_hash_change() {
+        let conn = setup();
+        upsert_file(&conn, "src/foo.ts", "abc123", 0.5).unwrap();
+        set_enrichment(&conn, "src/foo.ts", "A summary", "When to use").unwrap();
+
+        upsert_file(&conn, "src/foo.ts", "different_hash", 0.5).unwrap();
+
+        let stats = get_enrichment_stats(&conn).unwrap();
+        assert_eq!(stats.enriched_files, 0);
+    }
+
+    #[test]
+    fn upsert_preserves_enrichment_on_same_hash() {
+        let conn = setup();
+        upsert_file(&conn, "src/foo.ts", "abc123", 0.5).unwrap();
+        set_enrichment(&conn, "src/foo.ts", "A summary", "When to use").unwrap();
+
+        upsert_file(&conn, "src/foo.ts", "abc123", 0.8).unwrap();
+
+        let stats = get_enrichment_stats(&conn).unwrap();
+        assert_eq!(stats.enriched_files, 1);
+    }
+
+    // --- get_file_hash / get_file_id ---
+
+    #[test]
+    fn get_hash_nonexistent() {
+        let conn = setup();
+        assert!(get_file_hash(&conn, "nope.ts").is_none());
+    }
+
+    #[test]
+    fn get_id_nonexistent() {
+        let conn = setup();
+        assert!(get_file_id(&conn, "nope.ts").is_none());
+    }
+
+    #[test]
+    fn get_id_after_upsert() {
+        let conn = setup();
+        let id = upsert_file(&conn, "src/foo.ts", "abc", 0.0).unwrap();
+        assert_eq!(get_file_id(&conn, "src/foo.ts").unwrap(), id);
+    }
+
+    // --- delete_stale_files ---
+
+    #[test]
+    fn delete_stale_removes_unknown_files() {
+        let conn = setup();
+        upsert_file(&conn, "keep.ts", "a", 0.0).unwrap();
+        upsert_file(&conn, "stale.ts", "b", 0.0).unwrap();
+
+        let deleted = delete_stale_files(&conn, &["keep.ts".to_string()]).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(get_file_hash(&conn, "stale.ts").is_none());
+        assert!(get_file_hash(&conn, "keep.ts").is_some());
+    }
+
+    #[test]
+    fn delete_stale_empty_known_deletes_all() {
+        let conn = setup();
+        upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        upsert_file(&conn, "b.ts", "b", 0.0).unwrap();
+
+        let deleted = delete_stale_files(&conn, &[]).unwrap();
+        assert_eq!(deleted, 2);
+    }
+
+    // --- insert_symbols / query_symbols ---
+
+    #[test]
+    fn insert_and_query_symbols() {
+        let conn = setup();
+        let id = upsert_file(&conn, "src/foo.ts", "abc", 0.0).unwrap();
+        let symbols = vec![
+            (
+                "doThing".to_string(),
+                "function".to_string(),
+                true,
+                Some(1),
+                3_usize,
+            ),
+            (
+                "helper".to_string(),
+                "function".to_string(),
+                false,
+                Some(5),
+                1_usize,
+            ),
+        ];
+        insert_symbols(&conn, id, &symbols).unwrap();
+
+        let results = query_symbols(&conn, "doThing", 10, true).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "doThing");
+        assert!(results[0].is_exported);
+        assert_eq!(results[0].ref_count, 3);
+    }
+
+    #[test]
+    fn query_symbols_substring() {
+        let conn = setup();
+        let id = upsert_file(&conn, "src/foo.ts", "abc", 0.0).unwrap();
+        let symbols = vec![
+            (
+                "handleClick".to_string(),
+                "function".to_string(),
+                true,
+                Some(1),
+                0_usize,
+            ),
+            (
+                "handleSubmit".to_string(),
+                "function".to_string(),
+                true,
+                Some(5),
+                0_usize,
+            ),
+        ];
+        insert_symbols(&conn, id, &symbols).unwrap();
+
+        let results = query_symbols(&conn, "handle", 10, false).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn query_symbols_respects_limit() {
+        let conn = setup();
+        let id = upsert_file(&conn, "src/foo.ts", "abc", 0.0).unwrap();
+        let symbols: Vec<_> = (0..10)
+            .map(|i| {
+                (
+                    format!("sym{i}"),
+                    "variable".to_string(),
+                    true,
+                    Some(i),
+                    0_usize,
+                )
+            })
+            .collect();
+        insert_symbols(&conn, id, &symbols).unwrap();
+
+        let results = query_symbols(&conn, "sym", 3, false).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn insert_symbols_replaces_previous() {
+        let conn = setup();
+        let id = upsert_file(&conn, "src/foo.ts", "abc", 0.0).unwrap();
+
+        let syms1 = vec![(
+            "old".to_string(),
+            "function".to_string(),
+            true,
+            Some(1),
+            0_usize,
+        )];
+        insert_symbols(&conn, id, &syms1).unwrap();
+
+        let syms2 = vec![(
+            "new_sym".to_string(),
+            "function".to_string(),
+            true,
+            Some(1),
+            0_usize,
+        )];
+        insert_symbols(&conn, id, &syms2).unwrap();
+
+        assert!(query_symbols(&conn, "old", 10, true).unwrap().is_empty());
+        assert_eq!(query_symbols(&conn, "new_sym", 10, true).unwrap().len(), 1);
+    }
+
+    // --- insert_edges / get_file_deps ---
+
+    #[test]
+    fn insert_and_query_edges() {
+        let conn = setup();
+        let id_a = upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        let id_b = upsert_file(&conn, "b.ts", "b", 0.0).unwrap();
+
+        let edges = vec![(id_b, "import".to_string(), Some("foo".to_string()))];
+        insert_edges(&conn, id_a, &edges).unwrap();
+
+        let imports = get_file_deps(&conn, "a.ts", "imports").unwrap();
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].file_path, "b.ts");
+
+        let importers = get_file_deps(&conn, "b.ts", "importers").unwrap();
+        assert_eq!(importers.len(), 1);
+        assert_eq!(importers[0].file_path, "a.ts");
+    }
+
+    // --- update_ranks ---
+
+    #[test]
+    fn update_ranks_changes_rank() {
+        let conn = setup();
+        upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        upsert_file(&conn, "b.ts", "b", 0.0).unwrap();
+
+        let ranks = vec![("a.ts".to_string(), 0.9), ("b.ts".to_string(), 0.1)];
+        update_ranks(&conn, &ranks).unwrap();
+
+        let files = get_ranked_files_with_enrichment(&conn, 10).unwrap();
+        assert_eq!(files[0].path, "a.ts");
+        assert!((files[0].rank - 0.9).abs() < f64::EPSILON);
+    }
+
+    // --- get_stats ---
+
+    #[test]
+    fn get_stats_counts() {
+        let conn = setup();
+        let id = upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        let id_b = upsert_file(&conn, "b.ts", "b", 0.0).unwrap();
+        insert_symbols(
+            &conn,
+            id,
+            &[(
+                "foo".to_string(),
+                "function".to_string(),
+                true,
+                Some(1),
+                0_usize,
+            )],
+        )
+        .unwrap();
+        insert_edges(&conn, id, &[(id_b, "import".to_string(), None)]).unwrap();
+
+        let (files, exports, edges) = get_stats(&conn).unwrap();
+        assert_eq!(files, 2);
+        assert_eq!(exports, 1);
+        assert_eq!(edges, 1);
+    }
+
+    // --- enrichment ---
+
+    #[test]
+    fn set_and_get_enrichment() {
+        let conn = setup();
+        upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        set_enrichment(&conn, "a.ts", "File summary", "When modifying X").unwrap();
+
+        let stats = get_enrichment_stats(&conn).unwrap();
+        assert_eq!(stats.total_files, 1);
+        assert_eq!(stats.enriched_files, 1);
+
+        let files = get_ranked_files_with_enrichment(&conn, 10).unwrap();
+        assert_eq!(files[0].summary_enriched.as_deref(), Some("File summary"));
+        assert_eq!(
+            files[0].when_to_use_enriched.as_deref(),
+            Some("When modifying X")
+        );
+    }
+
+    #[test]
+    fn set_enrichment_nonexistent_file() {
+        let conn = setup();
+        assert!(set_enrichment(&conn, "nope.ts", "summary", "when").is_err());
+    }
+
+    #[test]
+    fn clear_enrichment_single() {
+        let conn = setup();
+        upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        set_enrichment(&conn, "a.ts", "summary", "when").unwrap();
+        clear_enrichment(&conn, "a.ts").unwrap();
+
+        assert_eq!(get_enrichment_stats(&conn).unwrap().enriched_files, 0);
+    }
+
+    #[test]
+    fn clear_enrichment_nonexistent() {
+        let conn = setup();
+        assert!(clear_enrichment(&conn, "nope.ts").is_err());
+    }
+
+    #[test]
+    fn clear_all_enrichments_works() {
+        let conn = setup();
+        upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        upsert_file(&conn, "b.ts", "b", 0.0).unwrap();
+        set_enrichment(&conn, "a.ts", "s1", "w1").unwrap();
+        set_enrichment(&conn, "b.ts", "s2", "w2").unwrap();
+
+        assert_eq!(clear_all_enrichments(&conn).unwrap(), 2);
+        assert_eq!(get_enrichment_stats(&conn).unwrap().enriched_files, 0);
+    }
+
+    // --- get_files_with_exports ---
+
+    #[test]
+    fn files_with_exports_unenriched_filter() {
+        let conn = setup();
+        let id_a = upsert_file(&conn, "a.ts", "a", 0.5).unwrap();
+        let id_b = upsert_file(&conn, "b.ts", "b", 0.3).unwrap();
+        insert_symbols(
+            &conn,
+            id_a,
+            &[(
+                "foo".to_string(),
+                "function".to_string(),
+                true,
+                Some(1),
+                0_usize,
+            )],
+        )
+        .unwrap();
+        insert_symbols(
+            &conn,
+            id_b,
+            &[(
+                "bar".to_string(),
+                "function".to_string(),
+                true,
+                Some(1),
+                0_usize,
+            )],
+        )
+        .unwrap();
+        set_enrichment(&conn, "a.ts", "summary", "when").unwrap();
+
+        let unenriched = get_files_with_exports(&conn, true).unwrap();
+        assert_eq!(unenriched.len(), 1);
+        assert_eq!(unenriched[0].path, "b.ts");
+
+        let all = get_files_with_exports(&conn, false).unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    // --- mtime ---
+
+    #[test]
+    fn file_mtime_roundtrip() {
+        let conn = setup();
+        upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        assert!(get_file_mtime(&conn, "a.ts").is_none());
+
+        update_file_mtime(&conn, "a.ts", 1234567890).unwrap();
+        assert_eq!(get_file_mtime(&conn, "a.ts").unwrap(), 1234567890);
+    }
+
+    // --- importer_counts ---
+
+    #[test]
+    fn importer_counts() {
+        let conn = setup();
+        let id_a = upsert_file(&conn, "a.ts", "a", 0.0).unwrap();
+        let id_b = upsert_file(&conn, "b.ts", "b", 0.0).unwrap();
+        let id_c = upsert_file(&conn, "c.ts", "c", 0.0).unwrap();
+
+        insert_edges(&conn, id_a, &[(id_c, "import".to_string(), None)]).unwrap();
+        insert_edges(&conn, id_b, &[(id_c, "import".to_string(), None)]).unwrap();
+
+        let counts = get_importer_counts(&conn).unwrap();
+        assert_eq!(*counts.get(&id_c).unwrap(), 2);
+        assert!(!counts.contains_key(&id_a));
+    }
 }

@@ -165,3 +165,118 @@ pub fn score_files(
     });
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_file(path: &str, rank: f64, exports: &[&str]) -> db::FileWithExportsAndEnrichment {
+        db::FileWithExportsAndEnrichment {
+            path: path.to_string(),
+            rank,
+            exports: exports.iter().map(|s| s.to_string()).collect(),
+            summary_enriched: None,
+            when_to_use_enriched: None,
+        }
+    }
+
+    // --- tokenize_query ---
+
+    #[test]
+    fn tokenize_removes_stop_words() {
+        let tokens = tokenize_query("the quick brown fox");
+        assert!(!tokens.contains(&"the".to_string()));
+        assert!(tokens.contains(&"quick".to_string()));
+        assert!(tokens.contains(&"brown".to_string()));
+        assert!(tokens.contains(&"fox".to_string()));
+    }
+
+    #[test]
+    fn tokenize_lowercases() {
+        let tokens = tokenize_query("FOO Bar");
+        assert!(tokens.contains(&"foo".to_string()));
+        assert!(tokens.contains(&"bar".to_string()));
+    }
+
+    #[test]
+    fn tokenize_trims_punctuation() {
+        let tokens = tokenize_query("hello, world!");
+        assert!(tokens.contains(&"hello".to_string()));
+        assert!(tokens.contains(&"world".to_string()));
+    }
+
+    #[test]
+    fn tokenize_deduplicates() {
+        let tokens = tokenize_query("foo foo foo");
+        assert_eq!(tokens.len(), 1);
+    }
+
+    #[test]
+    fn tokenize_empty_string() {
+        assert!(tokenize_query("").is_empty());
+    }
+
+    #[test]
+    fn tokenize_all_stop_words() {
+        assert!(tokenize_query("the is a an").is_empty());
+    }
+
+    // --- score_files ---
+
+    #[test]
+    fn score_path_match() {
+        let conn = db::init_test_db().unwrap();
+        let files = vec![test_file("src/utils/parser.ts", 1.0, &[])];
+        let scored = score_files(&["parser".to_string()], &files, &conn);
+        assert_eq!(scored.len(), 1);
+        assert!(scored[0].score > 0.0);
+    }
+
+    #[test]
+    fn score_export_match() {
+        let conn = db::init_test_db().unwrap();
+        let files = vec![test_file("src/foo.ts", 1.0, &["handleClick"])];
+        let scored = score_files(&["click".to_string()], &files, &conn);
+        assert_eq!(scored.len(), 1);
+        assert!(scored[0].score > 0.0);
+    }
+
+    #[test]
+    fn score_enrichment_summary_match() {
+        let conn = db::init_test_db().unwrap();
+        let mut file = test_file("src/foo.ts", 1.0, &[]);
+        file.summary_enriched = Some("Handles authentication logic".to_string());
+        let scored = score_files(&["authentication".to_string()], &[file], &conn);
+        assert_eq!(scored.len(), 1);
+    }
+
+    #[test]
+    fn score_enrichment_when_to_use_match() {
+        let conn = db::init_test_db().unwrap();
+        let mut file = test_file("src/foo.ts", 1.0, &[]);
+        file.when_to_use_enriched = Some("Modify when changing routing".to_string());
+        let scored = score_files(&["routing".to_string()], &[file], &conn);
+        assert_eq!(scored.len(), 1);
+    }
+
+    #[test]
+    fn score_no_match_returns_empty() {
+        let conn = db::init_test_db().unwrap();
+        let files = vec![test_file("src/foo.ts", 1.0, &["bar"])];
+        let scored = score_files(&["zzzznotfound".to_string()], &files, &conn);
+        assert!(scored.is_empty());
+    }
+
+    #[test]
+    fn score_rank_multiplier() {
+        let conn = db::init_test_db().unwrap();
+        let files = vec![
+            test_file("src/high.ts", 2.0, &["search"]),
+            test_file("src/low.ts", 0.1, &["search"]),
+        ];
+        let scored = score_files(&["search".to_string()], &files, &conn);
+        assert_eq!(scored.len(), 2);
+        assert_eq!(scored[0].path, "src/high.ts");
+        assert!(scored[0].score > scored[1].score);
+    }
+}

@@ -374,3 +374,307 @@ fn truncate(s: &str, max: usize) -> &str {
         &s[..end]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // --- analyze_file: imports ---
+
+    #[test]
+    fn named_import() {
+        let src = r#"import { foo, bar } from './utils';"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.imports.len(), 2);
+        assert_eq!(a.imports[0].name, "foo");
+        assert_eq!(a.imports[0].kind, ImportKind::Named);
+        assert_eq!(a.imports[1].name, "bar");
+        assert_eq!(a.imports[1].source, "./utils");
+    }
+
+    #[test]
+    fn default_import() {
+        let src = r#"import React from 'react';"#;
+        let a = analyze_file(Path::new("test.tsx"), src).unwrap();
+        assert_eq!(a.imports.len(), 1);
+        assert_eq!(a.imports[0].name, "React");
+        assert_eq!(a.imports[0].kind, ImportKind::Default);
+    }
+
+    #[test]
+    fn namespace_import() {
+        let src = r#"import * as fs from 'fs';"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.imports.len(), 1);
+        assert_eq!(a.imports[0].name, "fs");
+        assert_eq!(a.imports[0].kind, ImportKind::Namespace);
+    }
+
+    // --- analyze_file: exports ---
+
+    #[test]
+    fn export_function() {
+        let src = r#"export function doThing() { return 1; }"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.exports.len(), 1);
+        assert_eq!(a.exports[0].name, "doThing");
+        assert_eq!(a.exports[0].kind, ExportKind::Function);
+    }
+
+    #[test]
+    fn export_variable() {
+        let src = r#"export const x = 1;"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.exports.len(), 1);
+        assert_eq!(a.exports[0].name, "x");
+        assert_eq!(a.exports[0].kind, ExportKind::Variable);
+    }
+
+    #[test]
+    fn export_class() {
+        let src = r#"export class Foo { bar() {} }"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.exports.len(), 1);
+        assert_eq!(a.exports[0].name, "Foo");
+        assert_eq!(a.exports[0].kind, ExportKind::Class);
+    }
+
+    #[test]
+    fn export_interface() {
+        let src = r#"export interface Props { name: string; }"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.exports.len(), 1);
+        assert_eq!(a.exports[0].name, "Props");
+        assert_eq!(a.exports[0].kind, ExportKind::Interface);
+    }
+
+    #[test]
+    fn export_type_alias() {
+        let src = r#"export type ID = string;"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.exports.len(), 1);
+        assert_eq!(a.exports[0].name, "ID");
+        assert_eq!(a.exports[0].kind, ExportKind::TypeAlias);
+    }
+
+    #[test]
+    fn export_enum() {
+        let src = r#"export enum Color { Red, Green, Blue }"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.exports.len(), 1);
+        assert_eq!(a.exports[0].name, "Color");
+        assert_eq!(a.exports[0].kind, ExportKind::Enum);
+    }
+
+    #[test]
+    fn export_default() {
+        let src = r#"export default function() { return 1; }"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.exports.len(), 1);
+        assert_eq!(a.exports[0].name, "default");
+        assert_eq!(a.exports[0].kind, ExportKind::Default);
+    }
+
+    // --- analyze_file: re-exports ---
+
+    #[test]
+    fn reexport_named() {
+        let src = r#"export { foo } from './bar';"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.reexports.len(), 1);
+        assert_eq!(a.reexports[0].source, "./bar");
+        assert_eq!(a.reexports[0].local, "foo");
+        assert_eq!(a.reexports[0].exported, "foo");
+    }
+
+    #[test]
+    fn reexport_star() {
+        let src = r#"export * from './bar';"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.reexports.len(), 1);
+        assert_eq!(a.reexports[0].local, "*");
+        assert_eq!(a.reexports[0].exported, "*");
+    }
+
+    #[test]
+    fn reexport_star_as() {
+        let src = r#"export * as utils from './bar';"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert_eq!(a.reexports.len(), 1);
+        assert_eq!(a.reexports[0].local, "*");
+        assert_eq!(a.reexports[0].exported, "utils");
+    }
+
+    // --- analyze_file: edge cases ---
+
+    #[test]
+    fn empty_file() {
+        let a = analyze_file(Path::new("test.ts"), "").unwrap();
+        assert!(a.imports.is_empty());
+        assert!(a.exports.is_empty());
+        assert!(a.symbols.is_empty());
+    }
+
+    #[test]
+    fn no_imports_or_exports() {
+        let src = r#"const x = 1; function foo() {}"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        assert!(a.imports.is_empty());
+        assert!(a.exports.is_empty());
+        // Top-level symbols should still be captured
+        assert!(!a.symbols.is_empty());
+    }
+
+    #[test]
+    fn unsupported_file_type() {
+        let result = analyze_file(Path::new("test.py"), "x = 1");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn combined_imports_and_exports() {
+        let src = r#"
+import { useState } from 'react';
+import type { FC } from 'react';
+export const App: FC = () => null;
+export function helper() {}
+"#;
+        let a = analyze_file(Path::new("test.tsx"), src).unwrap();
+        assert_eq!(a.imports.len(), 2);
+        assert_eq!(a.exports.len(), 2);
+    }
+
+    #[test]
+    fn symbol_is_exported_flag() {
+        let src = r#"
+export function exported() {}
+function internal() {}
+"#;
+        let a = analyze_file(Path::new("test.ts"), src).unwrap();
+        let exported_sym = a.symbols.iter().find(|s| s.name == "exported");
+        let internal_sym = a.symbols.iter().find(|s| s.name == "internal");
+        assert!(exported_sym.is_some_and(|s| s.is_exported));
+        assert!(internal_sym.is_some_and(|s| !s.is_exported));
+    }
+
+    // --- extract_signatures ---
+
+    #[test]
+    fn signature_export_function() {
+        let src = r#"export function greet(name: string): string { return name; }"#;
+        let sigs = extract_signatures(Path::new("test.ts"), src);
+        assert_eq!(sigs.len(), 1);
+        assert!(sigs[0].contains("export"));
+        assert!(sigs[0].contains("greet"));
+        // Should not include function body
+        assert!(!sigs[0].contains("return"));
+    }
+
+    #[test]
+    fn signature_export_class() {
+        let src = r#"export class Foo { bar() {} }"#;
+        let sigs = extract_signatures(Path::new("test.ts"), src);
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0], "export class Foo");
+    }
+
+    #[test]
+    fn signature_export_interface() {
+        let src = r#"export interface Props { name: string; }"#;
+        let sigs = extract_signatures(Path::new("test.ts"), src);
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0], "export interface Props");
+    }
+
+    #[test]
+    fn signature_export_enum() {
+        let src = r#"export enum Color { Red, Green }"#;
+        let sigs = extract_signatures(Path::new("test.ts"), src);
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0], "export enum Color");
+    }
+
+    #[test]
+    fn signature_star_reexport() {
+        let src = r#"export * from './utils';"#;
+        let sigs = extract_signatures(Path::new("test.ts"), src);
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0], r#"export * from "./utils""#);
+    }
+
+    #[test]
+    fn signature_export_default_class() {
+        let src = r#"export default class Foo {}"#;
+        let sigs = extract_signatures(Path::new("test.ts"), src);
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0], "export default class Foo");
+    }
+
+    #[test]
+    fn signature_unsupported_extension() {
+        let sigs = extract_signatures(Path::new("test.py"), "x = 1");
+        assert!(sigs.is_empty());
+    }
+
+    #[test]
+    fn signature_empty_file() {
+        let sigs = extract_signatures(Path::new("test.ts"), "");
+        assert!(sigs.is_empty());
+    }
+
+    // --- truncate ---
+
+    #[test]
+    fn truncate_short_string() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_at_limit() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string() {
+        assert_eq!(truncate("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_multibyte_utf8() {
+        // "héllo" — é is 2 bytes in UTF-8
+        let s = "héllo";
+        let result = truncate(s, 3);
+        // Should not panic, should stop at char boundary
+        assert!(result.len() <= 3);
+        assert!(result.is_char_boundary(result.len()));
+    }
+
+    // --- byte_offset_to_line ---
+
+    #[test]
+    fn byte_offset_first_line() {
+        assert_eq!(byte_offset_to_line("hello\nworld\n", 3), 0);
+    }
+
+    #[test]
+    fn byte_offset_second_line() {
+        assert_eq!(byte_offset_to_line("hello\nworld\n", 8), 1);
+    }
+
+    #[test]
+    fn byte_offset_beyond_source() {
+        // Should clamp to source length, not panic
+        assert_eq!(byte_offset_to_line("hi\n", 999), 1);
+    }
+
+    // --- byte_offset_to_line_from_lines ---
+
+    #[test]
+    fn byte_offset_from_lines_basic() {
+        let lines: Vec<&str> = "hello\nworld\nfoo".lines().collect();
+        assert_eq!(byte_offset_to_line_from_lines(&lines, 0), 0);
+        assert_eq!(byte_offset_to_line_from_lines(&lines, 6), 1);
+        assert_eq!(byte_offset_to_line_from_lines(&lines, 12), 2);
+    }
+}

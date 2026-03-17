@@ -327,3 +327,134 @@ pub fn detect_language(path: &str) -> &str {
         "JavaScript"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- detect_language ---
+
+    #[test]
+    fn detect_typescript() {
+        assert_eq!(detect_language("src/foo.ts"), "TypeScript");
+        assert_eq!(detect_language("src/bar.tsx"), "TypeScript");
+    }
+
+    #[test]
+    fn detect_javascript() {
+        assert_eq!(detect_language("src/foo.js"), "JavaScript");
+        assert_eq!(detect_language("src/bar.jsx"), "JavaScript");
+    }
+
+    // --- build_prompt ---
+
+    #[test]
+    fn build_prompt_includes_file_path() {
+        let req = EnrichmentRequest {
+            file_path: "src/utils.ts".to_string(),
+            language: "TypeScript".to_string(),
+            imports: vec![],
+            exports: vec![],
+        };
+        let prompt = build_prompt(&req);
+        assert!(prompt.contains("src/utils.ts"));
+        assert!(prompt.contains("TypeScript"));
+    }
+
+    #[test]
+    fn build_prompt_includes_imports() {
+        let req = EnrichmentRequest {
+            file_path: "src/foo.ts".to_string(),
+            language: "TypeScript".to_string(),
+            imports: vec!["react".to_string(), "lodash".to_string()],
+            exports: vec![],
+        };
+        let prompt = build_prompt(&req);
+        assert!(prompt.contains("react"));
+        assert!(prompt.contains("lodash"));
+    }
+
+    #[test]
+    fn build_prompt_includes_exports() {
+        let req = EnrichmentRequest {
+            file_path: "src/foo.ts".to_string(),
+            language: "TypeScript".to_string(),
+            imports: vec![],
+            exports: vec!["handleClick".to_string(), "useAuth".to_string()],
+        };
+        let prompt = build_prompt(&req);
+        assert!(prompt.contains("handleClick"));
+        assert!(prompt.contains("useAuth"));
+    }
+
+    #[test]
+    fn build_prompt_omits_empty_sections() {
+        let req = EnrichmentRequest {
+            file_path: "src/foo.ts".to_string(),
+            language: "TypeScript".to_string(),
+            imports: vec![],
+            exports: vec![],
+        };
+        let prompt = build_prompt(&req);
+        assert!(!prompt.contains("Imports:"));
+        assert!(!prompt.contains("Exports:"));
+    }
+
+    // --- extract_enrichment ---
+
+    #[test]
+    fn extract_enrichment_valid() {
+        let json = serde_json::json!({
+            "summary": "Handles auth",
+            "when_to_use": "When modifying login"
+        });
+        let result = extract_enrichment(&json).unwrap();
+        assert_eq!(result.summary, "Handles auth");
+        assert_eq!(result.when_to_use, "When modifying login");
+    }
+
+    #[test]
+    fn extract_enrichment_missing_summary() {
+        let json = serde_json::json!({
+            "when_to_use": "When modifying login"
+        });
+        assert!(extract_enrichment(&json).is_err());
+    }
+
+    #[test]
+    fn extract_enrichment_missing_when_to_use() {
+        let json = serde_json::json!({
+            "summary": "Handles auth"
+        });
+        assert!(extract_enrichment(&json).is_err());
+    }
+
+    #[test]
+    fn extract_enrichment_wrong_types() {
+        let json = serde_json::json!({
+            "summary": 42,
+            "when_to_use": true
+        });
+        assert!(extract_enrichment(&json).is_err());
+    }
+
+    // --- resolve_provider ---
+
+    #[test]
+    fn resolve_provider_unknown() {
+        let result = resolve_provider("openai", None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_provider_gemini_with_key() {
+        let provider = resolve_provider("gemini", Some("test-key"), None).unwrap();
+        assert_eq!(provider.name(), "gemini");
+    }
+
+    #[test]
+    fn resolve_provider_anthropic_with_key() {
+        let provider = resolve_provider("anthropic", Some("test-key"), None).unwrap();
+        assert_eq!(provider.name(), "anthropic");
+    }
+}
