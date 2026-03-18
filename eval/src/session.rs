@@ -130,8 +130,15 @@ pub fn run_claude_session(
 
 /// Parse stream-json output into structured metrics.
 ///
-/// The stream-json format emits newline-delimited JSON events with a `type` field.
-/// Key event types: `assistant`, `tool_use`, `tool_result`, `result`.
+/// The stream-json format emits newline-delimited JSON events. Each event has a
+/// top-level `type` field. Tool uses appear as content blocks inside `assistant`
+/// events (not as top-level `tool_use` events):
+///
+/// ```jsonl
+/// {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"..."}}]}}
+/// {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
+/// {"type":"result","result":"...","usage":{"input_tokens":N,"output_tokens":N}}
+/// ```
 pub fn parse_stream_output(
     raw: &RawSessionOutput,
     known_files: &HashSet<String>,
@@ -159,48 +166,70 @@ pub fn parse_stream_output(
         let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
         match event_type {
-            "tool_use" => {
-                let name = event
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                metrics.tool_calls += 1;
-                *metrics
-                    .tool_calls_by_name
-                    .entry(name.to_string())
-                    .or_default() += 1;
-                turn_counter += 1;
-
-                // Track file reads via Read tool
-                if name == "Read"
-                    && let Some(path) = event.pointer("/input/file_path").and_then(|v| v.as_str())
-                {
-                    let normalized = normalize_path(path, workspace_prefix);
-                    if metrics.first_relevant_file_turn.is_none()
-                        && expected_files.contains(&normalized)
-                    {
-                        metrics.first_relevant_file_turn = Some(turn_counter);
-                    }
-                    metrics.files_read.insert(normalized);
-                }
-
-                // Track codemap usage via Bash tool
-                if name == "Bash"
-                    && let Some(cmd) = event.pointer("/input/command").and_then(|v| v.as_str())
-                    && cmd.contains("codemap")
-                {
-                    metrics.codemap_calls += 1;
-                }
-            }
             "assistant" => {
-                if let Some(text) = extract_text_from_message(&event) {
-                    for file in known_files.iter().filter(|f| text.contains(f.as_str())) {
-                        if metrics.first_relevant_file_turn.is_none()
-                            && expected_files.contains(file)
-                        {
-                            metrics.first_relevant_file_turn = Some(turn_counter.max(1));
+                // Content blocks inside assistant messages contain both tool_use and text
+                let content = event
+                    .pointer("/message/content")
+                    .or_else(|| event.get("content"))
+                    .and_then(|v| v.as_array());
+
+                let Some(blocks) = content else {
+                    continue;
+                };
+
+                for block in blocks {
+                    let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    match block_type {
+                        "tool_use" => {
+                            let name = block
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            metrics.tool_calls += 1;
+                            *metrics
+                                .tool_calls_by_name
+                                .entry(name.to_string())
+                                .or_default() += 1;
+                            turn_counter += 1;
+
+                            // Track file reads
+                            if name == "Read"
+                                && let Some(path) =
+                                    block.pointer("/input/file_path").and_then(|v| v.as_str())
+                            {
+                                let normalized = normalize_path(path, workspace_prefix);
+                                if metrics.first_relevant_file_turn.is_none()
+                                    && expected_files.contains(&normalized)
+                                {
+                                    metrics.first_relevant_file_turn = Some(turn_counter);
+                                }
+                                metrics.files_read.insert(normalized);
+                            }
+
+                            // Track codemap usage via Bash
+                            if name == "Bash"
+                                && let Some(cmd) =
+                                    block.pointer("/input/command").and_then(|v| v.as_str())
+                                && cmd.contains("codemap")
+                            {
+                                metrics.codemap_calls += 1;
+                            }
                         }
-                        metrics.files_mentioned.insert(file.clone());
+                        "text" => {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                for file in known_files.iter().filter(|f| text.contains(f.as_str()))
+                                {
+                                    if metrics.first_relevant_file_turn.is_none()
+                                        && expected_files.contains(file)
+                                    {
+                                        metrics.first_relevant_file_turn =
+                                            Some(turn_counter.max(1));
+                                    }
+                                    metrics.files_mentioned.insert(file.clone());
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -245,27 +274,6 @@ fn normalize_path(path: &str, workspace_prefix: &str) -> String {
         .unwrap_or(path)
         .trim_start_matches('/')
         .to_string()
-}
-
-/// Extract text content from an assistant message event.
-///
-/// Handles both `{"message":{"content":[...]}}` and `{"content":[...]}` shapes.
-fn extract_text_from_message(event: &Value) -> Option<String> {
-    let content = event
-        .pointer("/message/content")
-        .or_else(|| event.get("content"))
-        .and_then(|v| v.as_array())?;
-
-    let mut text = String::new();
-    for block in content {
-        if block.get("type").and_then(|v| v.as_str()) == Some("text")
-            && let Some(t) = block.get("text").and_then(|v| v.as_str())
-        {
-            text.push_str(t);
-        }
-    }
-
-    if text.is_empty() { None } else { Some(text) }
 }
 
 /// Try to parse a JSON file list from Claude's response text.
@@ -326,23 +334,6 @@ mod tests {
     }
 
     #[test]
-    fn extract_text_nested_message() {
-        let event: Value = serde_json::from_str(
-            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello world"}]}}"#,
-        ).unwrap();
-        assert_eq!(extract_text_from_message(&event).unwrap(), "hello world");
-    }
-
-    #[test]
-    fn extract_text_flat_content() {
-        let event: Value = serde_json::from_str(
-            r#"{"type":"assistant","content":[{"type":"text","text":"flat"}]}"#,
-        )
-        .unwrap();
-        assert_eq!(extract_text_from_message(&event).unwrap(), "flat");
-    }
-
-    #[test]
     fn parse_stream_basic() {
         let known: HashSet<String> = ["src/a.ts", "src/b.ts"]
             .into_iter()
@@ -350,11 +341,11 @@ mod tests {
             .collect();
         let expected: HashSet<String> = ["src/a.ts"].into_iter().map(Into::into).collect();
 
+        // Real stream-json format: tool_use is a content block inside assistant events
         let raw = RawSessionOutput {
             stdout: [
-                r#"{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/ws/src/a.ts"}}"#,
-                r#"{"type":"tool_result","name":"Read","content":"..."}"#,
-                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Found src/a.ts and src/b.ts"}]}}"#,
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","id":"toolu_01","input":{"file_path":"/tmp/ws/src/a.ts"}}]}}"#,
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Found src/a.ts and src/b.ts"}]}}"#,
                 r#"{"type":"result","result":"{\"relevant_files\": [\"src/a.ts\", \"src/b.ts\"]}","usage":{"input_tokens":1000,"output_tokens":200}}"#,
             ].join("\n"),
             stderr: String::new(),
@@ -381,8 +372,9 @@ mod tests {
         let known: HashSet<String> = HashSet::new();
         let expected: HashSet<String> = HashSet::new();
 
+        // Bash tool_use as content block inside assistant event
         let raw = RawSessionOutput {
-            stdout: r#"{"type":"tool_use","name":"Bash","input":{"command":"codemap context \"JWT auth\""}}"#.to_string(),
+            stdout: r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","id":"toolu_02","input":{"command":"codemap context \"JWT auth\""}}]}}"#.to_string(),
             stderr: String::new(),
             exit_code: Some(0),
             wall_clock_ms: 1000,
@@ -392,5 +384,25 @@ mod tests {
 
         assert_eq!(metrics.codemap_calls, 1);
         assert_eq!(metrics.tool_calls_by_name.get("Bash"), Some(&1));
+    }
+
+    #[test]
+    fn parse_stream_multiple_blocks_in_one_event() {
+        let known: HashSet<String> = ["src/a.ts"].into_iter().map(Into::into).collect();
+        let expected: HashSet<String> = HashSet::new();
+
+        // An assistant event can have both text and tool_use blocks
+        let raw = RawSessionOutput {
+            stdout: r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Let me read src/a.ts"},{"type":"tool_use","name":"Read","id":"toolu_03","input":{"file_path":"/tmp/ws/src/a.ts"}}]}}"#.to_string(),
+            stderr: String::new(),
+            exit_code: Some(0),
+            wall_clock_ms: 2000,
+        };
+
+        let metrics = parse_stream_output(&raw, &known, &expected, "test", "t-003", "/tmp/ws/");
+
+        assert_eq!(metrics.tool_calls, 1);
+        assert!(metrics.files_read.contains("src/a.ts"));
+        assert!(metrics.files_mentioned.contains("src/a.ts"));
     }
 }
