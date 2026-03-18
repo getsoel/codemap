@@ -149,7 +149,6 @@ pub fn run_e2e_eval(
                 match run_session_variant(
                     &repo_dir,
                     false,
-                    None,
                     &codemap_bin,
                     &task_prompt,
                     model,
@@ -176,7 +175,6 @@ pub fn run_e2e_eval(
                 match run_session_variant(
                     &repo_dir,
                     true,
-                    Some(db_source.as_path()),
                     &codemap_bin,
                     &task_prompt,
                     model,
@@ -248,7 +246,6 @@ pub fn run_e2e_eval(
 fn run_session_variant(
     repo_dir: &Path,
     is_treatment: bool,
-    index_db: Option<&Path>,
     codemap_bin: &Path,
     task_prompt: &str,
     model: &str,
@@ -260,21 +257,25 @@ fn run_session_variant(
     verbose: bool,
 ) -> Result<SessionMetrics> {
     let label = if is_treatment { "treatment" } else { "control" };
-    let ws = workspace::create_workspace(repo_dir, is_treatment, index_db, codemap_bin)?;
+    let ws = workspace::create_workspace(repo_dir, is_treatment, codemap_bin)?;
 
-    let raw = session::run_claude_session(
-        ws.path(),
-        task_prompt,
-        model,
-        max_turns,
-        timeout_secs,
-        ws.system_prompt.as_deref(),
-    )?;
+    let raw = session::run_claude_session(ws.path(), task_prompt, model, max_turns, timeout_secs)?;
 
     if verbose {
         eprintln!("    [{label} exit code]: {:?}", raw.exit_code);
         eprintln!("    [{label} stderr]: {}", truncate(&raw.stderr, 500));
         eprintln!("    [{label} stdout lines]: {}", raw.stdout.lines().count());
+    }
+
+    // Always verify hook injection for treatment sessions
+    if is_treatment {
+        let hook_fired = raw
+            .stdout
+            .lines()
+            .any(|l| l.contains("codemap") && !l.contains("\"tool_use\""));
+        if !hook_fired {
+            eprintln!("    WARNING: {label} session did not receive codemap hook injection");
+        }
     }
 
     let workspace_prefix = format!("{}/", ws.path().display());

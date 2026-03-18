@@ -7,17 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-const CODEMAP_INSTRUCTIONS: &str = "\
-## codemap — codebase intelligence
-Use these commands in Bash for structural codebase queries:
-- `codemap context \"<task>\"` — find the most relevant files for a task (start here)
-- `codemap symbol <name>` — find where a symbol is defined and who uses it
-- `codemap deps <file>` — imports and importers of a file
-- `codemap map` — ranked overview of top files with signatures";
-
 pub struct TempWorkspace {
     dir: TempDir,
-    pub system_prompt: Option<String>,
 }
 
 impl TempWorkspace {
@@ -28,36 +19,26 @@ impl TempWorkspace {
 
 /// Create an isolated workspace for a single eval session.
 ///
-/// Copies the repo into a temp directory. When `is_treatment` is true, also sets
-/// up `.codemap/index.db` and generates the system prompt (map + instructions).
+/// Copies the repo into a temp directory. When `is_treatment` is true, runs
+/// `codemap setup --no-post-hook` which indexes the codebase and writes the
+/// SessionStart hook to `.claude/settings.local.json`.
+/// Claude Code then picks up the hook naturally at session start.
 pub fn create_workspace(
     repo_dir: &Path,
     is_treatment: bool,
-    index_db: Option<&Path>,
     codemap_bin: &Path,
 ) -> Result<TempWorkspace> {
     let tmp = TempDir::new().context("failed to create temp directory")?;
 
     copy_repo(repo_dir, tmp.path())?;
 
-    let mut system_prompt = None;
-
     if is_treatment {
-        if let Some(db_path) = index_db {
-            let codemap_dir = tmp.path().join(".codemap");
-            std::fs::create_dir_all(&codemap_dir)?;
-            std::fs::copy(db_path, codemap_dir.join("index.db"))
-                .context("failed to copy index.db into workspace")?;
-        }
-
-        let map_output = run_codemap_map(codemap_bin, tmp.path())?;
-        system_prompt = Some(format!("{map_output}\n\n{CODEMAP_INSTRUCTIONS}"));
+        // Run `codemap setup --no-post-hook` — indexes the repo and writes the
+        // SessionStart hook config. This is the same path real users take.
+        run_codemap_setup(codemap_bin, tmp.path())?;
     }
 
-    Ok(TempWorkspace {
-        dir: tmp,
-        system_prompt,
-    })
+    Ok(TempWorkspace { dir: tmp })
 }
 
 /// Copy repo contents using rsync, excluding .git, .codemap, and node_modules.
@@ -80,20 +61,32 @@ fn copy_repo(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Run `codemap map --tokens 1500 --no-instructions` and capture output.
-fn run_codemap_map(codemap_bin: &Path, working_dir: &Path) -> Result<String> {
+/// Run `codemap setup --no-post-hook` to install the SessionStart hook.
+///
+/// This writes `.claude/settings.local.json` with a hook that runs
+/// `codemap instructions` at session start — the same config real users get.
+fn run_codemap_setup(codemap_bin: &Path, working_dir: &Path) -> Result<()> {
     let output = Command::new(codemap_bin)
         .current_dir(working_dir)
-        .args(["map", "--tokens", "1500", "--no-instructions"])
+        .args(["setup", "--no-post-hook"])
         .output()
-        .context("failed to run codemap map")?;
+        .context("failed to run codemap setup")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("codemap map failed: {stderr}");
+        anyhow::bail!("codemap setup failed: {stderr}");
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    // Verify the hook config was written and contains a SessionStart hook
+    let settings = working_dir.join(".claude/settings.local.json");
+    let content = std::fs::read_to_string(&settings)
+        .with_context(|| format!("codemap setup did not write {}", settings.display()))?;
+    ensure!(
+        content.contains("SessionStart"),
+        "codemap setup did not configure a SessionStart hook"
+    );
+
+    Ok(())
 }
 
 /// Ensure a repo checkout exists in `eval/repos/<name>`, cloning if necessary.

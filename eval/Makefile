@@ -12,7 +12,7 @@ FIXTURES  := fixtures
 SCRIPTS   := scripts
 
 # E2E defaults (override on command line)
-MODEL     ?= claude-sonnet-4-20250514
+MODEL     ?= claude-opus-4-6-20250514
 MAX_TURNS ?= 15
 VARIANT   ?= both
 CASES     ?=

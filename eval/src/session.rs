@@ -45,26 +45,26 @@ pub struct SessionMetrics {
 }
 
 /// Spawn claude CLI and capture stream-json output.
+///
+/// For treatment sessions, the SessionStart hook in `.claude/settings.local.json`
+/// (written by `codemap setup`) injects codemap context automatically — no
+/// `--append-system-prompt` needed.
 pub fn run_claude_session(
     working_dir: &Path,
     task_prompt: &str,
     model: &str,
     max_turns: usize,
     timeout_secs: u64,
-    append_system_prompt: Option<&str>,
 ) -> Result<RawSessionOutput> {
     let mut cmd = Command::new("claude");
     cmd.current_dir(working_dir)
         .arg("-p")
         .arg(task_prompt)
         .args(["--output-format", "stream-json"])
+        .arg("--verbose")
         .args(["--model", model])
         .args(["--max-turns", &max_turns.to_string()])
         .args(["--permission-mode", "plan"]);
-
-    if let Some(prompt) = append_system_prompt {
-        cmd.args(["--append-system-prompt", prompt]);
-    }
 
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
