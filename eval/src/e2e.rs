@@ -75,9 +75,12 @@ struct E2eAggregate {
     avg_treatment_tool_calls: f64,
     avg_enriched_tool_calls: f64,
     tool_call_reduction_pct: f64,
-    avg_control_tokens: f64,
-    avg_treatment_tokens: f64,
-    avg_enriched_tokens: f64,
+    avg_control_input_tokens: f64,
+    avg_control_output_tokens: f64,
+    avg_treatment_input_tokens: f64,
+    avg_treatment_output_tokens: f64,
+    avg_enriched_input_tokens: f64,
+    avg_enriched_output_tokens: f64,
     token_reduction_pct: f64,
     avg_control_wall_time_ms: f64,
     avg_treatment_wall_time_ms: f64,
@@ -114,6 +117,12 @@ pub fn run_e2e_eval(
     verbose: bool,
 ) -> Result<()> {
     check_prerequisites(variant)?;
+
+    let enrichment_model = if matches!(variant, Variant::All | Variant::Enriched) {
+        detect_enrichment_model()
+    } else {
+        None
+    };
 
     let datasets = crate::load_datasets(dataset_path)?;
     let codemap_bin = workspace::find_codemap_bin()?;
@@ -304,7 +313,7 @@ pub fn run_e2e_eval(
 
         if !results.is_empty() {
             let agg = compute_aggregate(&results);
-            print_e2e_report(&ds.repo, &results, &agg, model);
+            print_e2e_report(&ds.repo, &results, &agg, model, enrichment_model.as_deref());
 
             // Archive results before moving into all_dataset_reports
             if let Some(ref hist_conn) = history_conn {
@@ -314,6 +323,7 @@ pub fn run_e2e_eval(
                     "max_turns": max_turns,
                     "timeout_secs": timeout_secs,
                     "variant": format!("{variant:?}"),
+                    "enrichment_model": &enrichment_model,
                 });
                 history::save_run(
                     hist_conn,
@@ -339,7 +349,13 @@ pub fn run_e2e_eval(
 
     // Write combined markdown report
     if !all_dataset_reports.is_empty() {
-        write_markdown_report(&eval_dir, &all_dataset_reports, model, &git_commit)?;
+        write_markdown_report(
+            &eval_dir,
+            &all_dataset_reports,
+            model,
+            &git_commit,
+            enrichment_model.as_deref(),
+        )?;
     }
 
     Ok(())
@@ -434,19 +450,33 @@ fn check_prerequisites(variant: Variant) -> Result<()> {
     Ok(())
 }
 
+/// Detect which enrichment model `codemap enrich --api` would use based on env vars.
+///
+/// The codemap CLI defaults to `--provider gemini` and uses model `gemini-2.5-flash-lite`.
+/// Falls back to Anthropic (`claude-haiku-4-5-20251001`) if only `ANTHROPIC_API_KEY` is set.
+fn detect_enrichment_model() -> Option<String> {
+    if std::env::var("GEMINI_API_KEY").is_ok_and(|v| !v.is_empty()) {
+        Some("gemini (gemini-2.5-flash-lite)".to_string())
+    } else if std::env::var("ANTHROPIC_API_KEY").is_ok_and(|v| !v.is_empty()) {
+        Some("anthropic (claude-haiku-4-5-20251001)".to_string())
+    } else {
+        None
+    }
+}
+
 fn print_session_summary(label: &str, metrics: &SessionMetrics, expected: &HashSet<String>) {
     let file_set = best_file_set(metrics);
     let r = recall(&file_set, expected);
     let p = precision_from_identified(&metrics.files_identified, expected);
     eprintln!(
         "    {label:10} {} tools, {} files read, recall={:.0}% precision={:.0}%, \
-         {}+{} tokens, {:.1}s",
+         {:.1}k in + {:.1}k out tokens, {:.1}s",
         metrics.tool_calls,
         metrics.files_read.len(),
         r * 100.0,
         p * 100.0,
-        metrics.input_tokens,
-        metrics.output_tokens,
+        metrics.input_tokens as f64 / 1000.0,
+        metrics.output_tokens as f64 / 1000.0,
         metrics.wall_clock_ms as f64 / 1000.0,
     );
     if metrics.codemap_calls > 0 {
@@ -576,7 +606,8 @@ impl E2eAggregate {
                 self.avg_control_recall += r;
                 self.avg_control_precision += p;
                 self.avg_control_tool_calls += m.tool_calls as f64;
-                self.avg_control_tokens += (m.input_tokens + m.output_tokens) as f64;
+                self.avg_control_input_tokens += m.input_tokens as f64;
+                self.avg_control_output_tokens += m.output_tokens as f64;
                 self.avg_control_wall_time_ms += m.wall_clock_ms as f64;
                 self.avg_control_codemap_calls += m.codemap_calls as f64;
             }
@@ -584,7 +615,8 @@ impl E2eAggregate {
                 self.avg_treatment_recall += r;
                 self.avg_treatment_precision += p;
                 self.avg_treatment_tool_calls += m.tool_calls as f64;
-                self.avg_treatment_tokens += (m.input_tokens + m.output_tokens) as f64;
+                self.avg_treatment_input_tokens += m.input_tokens as f64;
+                self.avg_treatment_output_tokens += m.output_tokens as f64;
                 self.avg_treatment_wall_time_ms += m.wall_clock_ms as f64;
                 self.avg_treatment_codemap_calls += m.codemap_calls as f64;
             }
@@ -592,7 +624,8 @@ impl E2eAggregate {
                 self.avg_enriched_recall += r;
                 self.avg_enriched_precision += p;
                 self.avg_enriched_tool_calls += m.tool_calls as f64;
-                self.avg_enriched_tokens += (m.input_tokens + m.output_tokens) as f64;
+                self.avg_enriched_input_tokens += m.input_tokens as f64;
+                self.avg_enriched_output_tokens += m.output_tokens as f64;
                 self.avg_enriched_wall_time_ms += m.wall_clock_ms as f64;
                 self.avg_enriched_codemap_calls += m.codemap_calls as f64;
             }
@@ -617,9 +650,12 @@ impl E2eAggregate {
         self.avg_control_tool_calls /= nf;
         self.avg_treatment_tool_calls /= nf;
         self.avg_enriched_tool_calls /= nf;
-        self.avg_control_tokens /= nf;
-        self.avg_treatment_tokens /= nf;
-        self.avg_enriched_tokens /= nf;
+        self.avg_control_input_tokens /= nf;
+        self.avg_control_output_tokens /= nf;
+        self.avg_treatment_input_tokens /= nf;
+        self.avg_treatment_output_tokens /= nf;
+        self.avg_enriched_input_tokens /= nf;
+        self.avg_enriched_output_tokens /= nf;
         self.avg_control_wall_time_ms /= nf;
         self.avg_treatment_wall_time_ms /= nf;
         self.avg_enriched_wall_time_ms /= nf;
@@ -639,8 +675,10 @@ impl E2eAggregate {
 
         self.tool_call_reduction_pct =
             reduction_pct(self.avg_control_tool_calls, self.avg_treatment_tool_calls);
-        self.token_reduction_pct =
-            reduction_pct(self.avg_control_tokens, self.avg_treatment_tokens);
+        let control_total_tokens = self.avg_control_input_tokens + self.avg_control_output_tokens;
+        let treatment_total_tokens =
+            self.avg_treatment_input_tokens + self.avg_treatment_output_tokens;
+        self.token_reduction_pct = reduction_pct(control_total_tokens, treatment_total_tokens);
         self.time_reduction_pct = reduction_pct(
             self.avg_control_wall_time_ms,
             self.avg_treatment_wall_time_ms,
@@ -744,7 +782,13 @@ fn has_enriched(results: &[TaskResult]) -> bool {
     results.iter().any(|r| r.enriched.is_some())
 }
 
-fn print_e2e_report(dataset: &str, results: &[TaskResult], agg: &E2eAggregate, model: &str) {
+fn print_e2e_report(
+    dataset: &str,
+    results: &[TaskResult],
+    agg: &E2eAggregate,
+    model: &str,
+    enrichment_model: Option<&str>,
+) {
     let has_comparison = results.iter().any(|r| r.has_multiple_variants());
     let show_enriched = has_enriched(results);
 
@@ -752,10 +796,17 @@ fn print_e2e_report(dataset: &str, results: &[TaskResult], agg: &E2eAggregate, m
 
     println!();
     println!("{}", "\u{2550}".repeat(width));
-    println!(
-        "End-to-End Eval: {dataset} ({} tasks, model: {model})",
-        agg.count
-    );
+    if let Some(enrich_model) = enrichment_model {
+        println!(
+            "End-to-End Eval: {dataset} ({} tasks, model: {model}, enrichment: {enrich_model})",
+            agg.count
+        );
+    } else {
+        println!(
+            "End-to-End Eval: {dataset} ({} tasks, model: {model})",
+            agg.count
+        );
+    }
     println!("{}", "\u{2550}".repeat(width));
 
     if has_comparison {
@@ -815,23 +866,48 @@ fn print_e2e_report(dataset: &str, results: &[TaskResult], agg: &E2eAggregate, m
                 -agg.tool_call_reduction_pct,
             );
         }
-        // Tokens
+        // Tokens (input)
         if show_enriched {
             println!(
                 "  {:20} {:>9.1}k {:>9.1}k {:>9.1}k {:>+9.0}%",
-                "Tokens (total)",
-                agg.avg_control_tokens / 1000.0,
-                agg.avg_treatment_tokens / 1000.0,
-                agg.avg_enriched_tokens / 1000.0,
-                -agg.token_reduction_pct,
+                "Input tokens",
+                agg.avg_control_input_tokens / 1000.0,
+                agg.avg_treatment_input_tokens / 1000.0,
+                agg.avg_enriched_input_tokens / 1000.0,
+                -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
             );
         } else {
             println!(
                 "  {:20} {:>9.1}k {:>9.1}k {:>+9.0}%",
-                "Tokens (total)",
-                agg.avg_control_tokens / 1000.0,
-                agg.avg_treatment_tokens / 1000.0,
-                -agg.token_reduction_pct,
+                "Input tokens",
+                agg.avg_control_input_tokens / 1000.0,
+                agg.avg_treatment_input_tokens / 1000.0,
+                -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
+            );
+        }
+        // Tokens (output)
+        if show_enriched {
+            println!(
+                "  {:20} {:>9.1}k {:>9.1}k {:>9.1}k {:>+9.0}%",
+                "Output tokens",
+                agg.avg_control_output_tokens / 1000.0,
+                agg.avg_treatment_output_tokens / 1000.0,
+                agg.avg_enriched_output_tokens / 1000.0,
+                -reduction_pct(
+                    agg.avg_control_output_tokens,
+                    agg.avg_treatment_output_tokens
+                ),
+            );
+        } else {
+            println!(
+                "  {:20} {:>9.1}k {:>9.1}k {:>+9.0}%",
+                "Output tokens",
+                agg.avg_control_output_tokens / 1000.0,
+                agg.avg_treatment_output_tokens / 1000.0,
+                -reduction_pct(
+                    agg.avg_control_output_tokens,
+                    agg.avg_treatment_output_tokens
+                ),
             );
         }
         // Wall time
@@ -919,15 +995,19 @@ fn write_markdown_report(
     reports: &[DatasetReport],
     model: &str,
     git_commit: &str,
+    enrichment_model: Option<&str>,
 ) -> Result<()> {
     let path = eval_dir.join("RESULTS.md");
     let mut md = String::new();
 
     writeln!(md, "# E2E Eval Results").unwrap();
     writeln!(md).unwrap();
+    let enrichment_suffix = enrichment_model
+        .map(|m| format!(" | Enrichment model: `{m}`"))
+        .unwrap_or_default();
     writeln!(
         md,
-        "> Auto-generated by `codemap-eval e2e`. Commit: `{git_commit}` | Model: `{model}`"
+        "> Auto-generated by `codemap-eval e2e`. Commit: `{git_commit}` | Model: `{model}`{enrichment_suffix}"
     )
     .unwrap();
     writeln!(md).unwrap();
@@ -960,7 +1040,12 @@ fn write_markdown_report(
         "| Tool calls | Average number of tool invocations (Read, Grep, Glob, Bash, etc.) |"
     )
     .unwrap();
-    writeln!(md, "| Tokens | Total input + output tokens consumed |").unwrap();
+    writeln!(
+        md,
+        "| Input tokens | Context tokens consumed (prompt + tool results) |"
+    )
+    .unwrap();
+    writeln!(md, "| Output tokens | Tokens generated by the model |").unwrap();
     writeln!(md, "| Wall time | Clock time per session |").unwrap();
     writeln!(md).unwrap();
     writeln!(
@@ -1032,11 +1117,23 @@ fn write_dataset_section(
             .unwrap();
             writeln!(
                 md,
-                "| Tokens | {:.1}k | {:.1}k | {:.1}k | {:+.0}% |",
-                agg.avg_control_tokens / 1000.0,
-                agg.avg_treatment_tokens / 1000.0,
-                agg.avg_enriched_tokens / 1000.0,
-                -agg.token_reduction_pct,
+                "| Input tokens | {:.1}k | {:.1}k | {:.1}k | {:+.0}% |",
+                agg.avg_control_input_tokens / 1000.0,
+                agg.avg_treatment_input_tokens / 1000.0,
+                agg.avg_enriched_input_tokens / 1000.0,
+                -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
+            )
+            .unwrap();
+            writeln!(
+                md,
+                "| Output tokens | {:.1}k | {:.1}k | {:.1}k | {:+.0}% |",
+                agg.avg_control_output_tokens / 1000.0,
+                agg.avg_treatment_output_tokens / 1000.0,
+                agg.avg_enriched_output_tokens / 1000.0,
+                -reduction_pct(
+                    agg.avg_control_output_tokens,
+                    agg.avg_treatment_output_tokens
+                ),
             )
             .unwrap();
             writeln!(
@@ -1077,10 +1174,21 @@ fn write_dataset_section(
             .unwrap();
             writeln!(
                 md,
-                "| Tokens | {:.1}k | {:.1}k | {:+.0}% |",
-                agg.avg_control_tokens / 1000.0,
-                agg.avg_treatment_tokens / 1000.0,
-                -agg.token_reduction_pct,
+                "| Input tokens | {:.1}k | {:.1}k | {:+.0}% |",
+                agg.avg_control_input_tokens / 1000.0,
+                agg.avg_treatment_input_tokens / 1000.0,
+                -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
+            )
+            .unwrap();
+            writeln!(
+                md,
+                "| Output tokens | {:.1}k | {:.1}k | {:+.0}% |",
+                agg.avg_control_output_tokens / 1000.0,
+                agg.avg_treatment_output_tokens / 1000.0,
+                -reduction_pct(
+                    agg.avg_control_output_tokens,
+                    agg.avg_treatment_output_tokens
+                ),
             )
             .unwrap();
             writeln!(
