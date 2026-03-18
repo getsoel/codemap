@@ -52,6 +52,31 @@ tracing-subscriber = "0.3"
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parser"
+harness = false
+
+[[bench]]
+name = "graph"
+harness = false
+
+[[bench]]
+name = "hash"
+harness = false
+
+[[bench]]
+name = "scorer"
+harness = false
+
+[[bench]]
+name = "db"
+harness = false
+
+[[bench]]
+name = "index"
+harness = false
 
 [profile.release]
 opt-level = 3
