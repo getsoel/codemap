@@ -1,0 +1,251 @@
+{
+  "repo": "tldraw",
+  "language": "js/ts",
+  "commit": "latest",
+  "index_db": "fixtures/tldraw/index.db",
+  "cases": [
+    {
+      "id": "tld-001",
+      "query": "fix arrow rendering between shapes",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/arrow/ArrowShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/shapes/arrow/shared.ts", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/shapes/arrow/curved-arrow.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/shapes/arrow/straight-arrow.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/shapes/arrow/arrowheads.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-002",
+      "query": "update the selection tool drag behavior",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/tools/SelectTool/selectHelpers.ts", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/tools/selection-logic/updateHoveredShapeId.ts", "relevance": 2 },
+        { "path": "packages/editor/src/lib/editor/Editor.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-003",
+      "query": "add a new geometric shape type",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/geo/GeoShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/shapes/geo/GeoShapeTool.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/shapes/geo/getGeoShapePath.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/shapes/geo/components/GeoShapeBody.tsx", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/defaultShapeUtils.ts", "relevance": 1 },
+        { "path": "packages/tlschema/src/records/TLShape.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-004",
+      "query": "fix SVG export and image rendering",
+      "expected_files": [
+        { "path": "packages/editor/src/lib/exports/exportToSvg.tsx", "relevance": 3 },
+        { "path": "packages/editor/src/lib/exports/getSvgAsImage.ts", "relevance": 3 },
+        { "path": "packages/editor/src/lib/exports/getSvgJsx.tsx", "relevance": 2 },
+        { "path": "packages/editor/src/lib/exports/FontEmbedder.ts", "relevance": 1 },
+        { "path": "packages/editor/src/lib/exports/StyleEmbedder.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-005",
+      "query": "improve real-time collaboration and sync",
+      "expected_files": [
+        { "path": "packages/sync-core/src/lib/TLSyncRoom.ts", "relevance": 3 },
+        { "path": "packages/sync-core/src/lib/TLSyncClient.ts", "relevance": 3 },
+        { "path": "packages/sync-core/src/lib/protocol.ts", "relevance": 2 },
+        { "path": "packages/sync-core/src/lib/ClientWebSocketAdapter.ts", "relevance": 2 },
+        { "path": "packages/sync-core/src/lib/diff.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-006",
+      "query": "update the vector math and point calculations",
+      "expected_files": [
+        { "path": "packages/editor/src/lib/primitives/Vec.ts", "relevance": 3 },
+        { "path": "packages/editor/src/lib/primitives/utils.ts", "relevance": 3 },
+        { "path": "packages/editor/src/lib/primitives/Box.ts", "relevance": 2 },
+        { "path": "packages/editor/src/lib/primitives/easings.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-007",
+      "query": "fix the eraser tool behavior",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/tools/EraserTool/EraserTool.ts", "relevance": 3 },
+        { "path": "packages/editor/src/lib/editor/Editor.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-008",
+      "query": "update UI translation and internationalization",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/ui/hooks/useTranslation/useTranslation.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/ui/hooks/useTranslation/TLUiTranslationKey.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/ui/hooks/useTranslation/defaultTranslation.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/ui/hooks/useTranslation/translations.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-009",
+      "query": "add bookmark shape embed support",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/bookmark/BookmarkShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/shapes/embed/EmbedShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/defaultShapeUtils.ts", "relevance": 1 },
+        { "path": "packages/tldraw/src/lib/defaultEmbedDefinitions.ts", "relevance": 2 }
+      ]
+    },
+    {
+      "id": "tld-010",
+      "query": "fix the store record diffing and snapshots",
+      "expected_files": [
+        { "path": "packages/store/src/lib/Store.ts", "relevance": 3 },
+        { "path": "packages/store/src/lib/BaseRecord.ts", "relevance": 2 },
+        { "path": "packages/store/src/lib/RecordType.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-011",
+      "query": "update drawing tool freehand strokes",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/draw/DrawShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/defaultShapeUtils.ts", "relevance": 1 },
+        { "path": "packages/editor/src/lib/editor/Editor.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-012",
+      "query": "fix DOM event handling and pointer capture",
+      "expected_files": [
+        { "path": "packages/editor/src/lib/utils/dom.ts", "relevance": 3 },
+        { "path": "packages/editor/src/lib/editor/Editor.ts", "relevance": 1 },
+        { "path": "packages/editor/src/lib/utils/debug-flags.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-013",
+      "query": "add frame shape grouping and nesting",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/frame/FrameShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/defaultShapeUtils.ts", "relevance": 1 },
+        { "path": "packages/editor/src/lib/editor/Editor.ts", "relevance": 1 },
+        { "path": "packages/tlschema/src/records/TLShape.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-014",
+      "query": "fix the schema validation and shape migrations",
+      "expected_files": [
+        { "path": "packages/tlschema/src/createTLSchema.ts", "relevance": 3 },
+        { "path": "packages/tlschema/src/records/TLShape.ts", "relevance": 3 },
+        { "path": "packages/tlschema/src/styles/StyleProp.ts", "relevance": 2 },
+        { "path": "packages/tlschema/src/misc/id-validator.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-015",
+      "query": "update rich text editing in shapes",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/utils/text/richText.ts", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/shapes/text/TextShapeUtil.tsx", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/shapes/note/NoteShapeUtil.tsx", "relevance": 1 },
+        { "path": "packages/tldraw/src/lib/tools/SelectTool/selectHelpers.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-016",
+      "query": "fix zoom and hand tool panning",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/tools/ZoomTool/ZoomTool.ts", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/tools/HandTool/HandTool.ts", "relevance": 3 },
+        { "path": "packages/editor/src/lib/editor/Editor.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-017",
+      "query": "add font loading and custom typography",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/shared/defaultFonts.tsx", "relevance": 3 },
+        { "path": "packages/editor/src/lib/exports/FontEmbedder.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/utils/text/richText.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-018",
+      "query": "update the editor hook and React context provider",
+      "expected_files": [
+        { "path": "packages/editor/src/lib/hooks/useEditor.tsx", "relevance": 3 },
+        { "path": "packages/editor/src/lib/hooks/useSafeId.tsx", "relevance": 2 },
+        { "path": "packages/editor/src/lib/editor/Editor.ts", "relevance": 2 }
+      ]
+    },
+    {
+      "id": "tld-019",
+      "query": "fix elbow arrow routing between shapes",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/arrow/elbow/getElbowArrowInfo.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/shapes/arrow/elbow/routes/elbowArrowRoutes.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/shapes/arrow/elbow/routes/ElbowArrowRouteBuilder.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/shapes/arrow/elbow/definitions.ts", "relevance": 2 },
+        { "path": "packages/tldraw/src/lib/shapes/arrow/shared.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-020",
+      "query": "update the UI event system and analytics tracking",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/ui/context/events.tsx", "relevance": 3 },
+        { "path": "apps/dotcom/client/src/utils/analytics.tsx", "relevance": 3 },
+        { "path": "apps/dotcom/client/src/tla/utils/app-ui-events.tsx", "relevance": 2 }
+      ]
+    },
+    {
+      "id": "tld-021",
+      "query": "fix image and video shape rendering",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/image/ImageShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/shapes/video/VideoShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/defaultShapeUtils.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-022",
+      "query": "improve the bounding box selection handles",
+      "expected_files": [
+        { "path": "packages/editor/src/lib/primitives/Box.ts", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/tools/selection-logic/updateHoveredShapeId.ts", "relevance": 2 },
+        { "path": "packages/editor/src/lib/editor/Editor.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-023",
+      "query": "update WebSocket sync adapter and reconnection",
+      "expected_files": [
+        { "path": "packages/sync-core/src/lib/ClientWebSocketAdapter.ts", "relevance": 3 },
+        { "path": "packages/sync-core/src/lib/ServerSocketAdapter.ts", "relevance": 2 },
+        { "path": "packages/sync-core/src/lib/TLSocketRoom.ts", "relevance": 2 },
+        { "path": "packages/sync-core/src/lib/TLSyncClient.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-024",
+      "query": "fix note shape sticky notes behavior",
+      "expected_files": [
+        { "path": "packages/tldraw/src/lib/shapes/note/NoteShapeUtil.tsx", "relevance": 3 },
+        { "path": "packages/tldraw/src/lib/defaultShapeUtils.ts", "relevance": 1 },
+        { "path": "packages/tldraw/src/lib/utils/text/richText.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "tld-025",
+      "query": "add CSS parsing for shape style export",
+      "expected_files": [
+        { "path": "packages/editor/src/lib/exports/parseCss.ts", "relevance": 3 },
+        { "path": "packages/editor/src/lib/exports/cssRules.ts", "relevance": 3 },
+        { "path": "packages/editor/src/lib/exports/StyleEmbedder.ts", "relevance": 2 },
+        { "path": "packages/editor/src/lib/exports/exportToSvg.tsx", "relevance": 1 }
+      ]
+    }
+  ]
+}

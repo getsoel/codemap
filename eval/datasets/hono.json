@@ -1,0 +1,194 @@
+{
+  "repo": "hono",
+  "language": "js/ts",
+  "commit": "latest",
+  "index_db": "fixtures/hono/index.db",
+  "cases": [
+    {
+      "id": "hono-001",
+      "query": "add a new HTTP response helper to the context object",
+      "expected_files": [
+        { "path": "src/context.ts", "relevance": 3 },
+        { "path": "src/types.ts", "relevance": 2 },
+        { "path": "src/utils/http-status.ts", "relevance": 1 },
+        { "path": "src/request.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-002",
+      "query": "fix URL path parameter parsing and routing",
+      "expected_files": [
+        { "path": "src/utils/url.ts", "relevance": 3 },
+        { "path": "src/router.ts", "relevance": 3 },
+        { "path": "src/router/trie-router/router.ts", "relevance": 2 },
+        { "path": "src/router/smart-router/router.ts", "relevance": 1 },
+        { "path": "src/router/reg-exp-router/index.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-003",
+      "query": "update cookie handling and signed cookies",
+      "expected_files": [
+        { "path": "src/helper/cookie/index.ts", "relevance": 3 },
+        { "path": "src/utils/cookie.ts", "relevance": 3 },
+        { "path": "src/context.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-004",
+      "query": "fix JWT token signing and verification",
+      "expected_files": [
+        { "path": "src/utils/jwt/jws.ts", "relevance": 3 },
+        { "path": "src/utils/jwt/jwa.ts", "relevance": 2 },
+        { "path": "src/utils/jwt/types.ts", "relevance": 2 },
+        { "path": "src/utils/encode.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-005",
+      "query": "improve JSX rendering and streaming support",
+      "expected_files": [
+        { "path": "src/jsx/base.ts", "relevance": 3 },
+        { "path": "src/jsx/streaming.ts", "relevance": 3 },
+        { "path": "src/jsx/index.ts", "relevance": 2 },
+        { "path": "src/jsx/dom/index.ts", "relevance": 1 },
+        { "path": "src/utils/html.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-006",
+      "query": "add WebSocket support and upgrade handling",
+      "expected_files": [
+        { "path": "src/helper/websocket/index.ts", "relevance": 3 },
+        { "path": "src/context.ts", "relevance": 1 },
+        { "path": "src/types.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-007",
+      "query": "fix AWS Lambda event processing and response handling",
+      "expected_files": [
+        { "path": "src/adapter/aws-lambda/handler.ts", "relevance": 3 },
+        { "path": "src/adapter/aws-lambda/types.ts", "relevance": 2 },
+        { "path": "src/adapter/lambda-edge/handler.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-008",
+      "query": "update base64 encoding and decoding utilities",
+      "expected_files": [
+        { "path": "src/utils/encode.ts", "relevance": 3 },
+        { "path": "src/utils/crypto.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-009",
+      "query": "improve error handling and HTTP exceptions",
+      "expected_files": [
+        { "path": "src/http-exception.ts", "relevance": 3 },
+        { "path": "src/hono-base.ts", "relevance": 2 },
+        { "path": "src/types.ts", "relevance": 1 },
+        { "path": "src/utils/http-status.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-010",
+      "query": "add middleware composition and handler chaining",
+      "expected_files": [
+        { "path": "src/compose.ts", "relevance": 3 },
+        { "path": "src/hono-base.ts", "relevance": 3 },
+        { "path": "src/types.ts", "relevance": 2 },
+        { "path": "src/context.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-011",
+      "query": "fix HTML escaping and XSS prevention",
+      "expected_files": [
+        { "path": "src/utils/html.ts", "relevance": 3 },
+        { "path": "src/helper/html/index.ts", "relevance": 3 },
+        { "path": "src/jsx/base.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-012",
+      "query": "update the typed client and request inference",
+      "expected_files": [
+        { "path": "src/client/types.ts", "relevance": 3 },
+        { "path": "src/client/utils.ts", "relevance": 2 },
+        { "path": "src/types.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-013",
+      "query": "add static site generation and file output",
+      "expected_files": [
+        { "path": "src/helper/ssg/ssg.ts", "relevance": 3 },
+        { "path": "src/hono.ts", "relevance": 1 },
+        { "path": "src/types.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-014",
+      "query": "fix MIME type detection and content type handling",
+      "expected_files": [
+        { "path": "src/utils/mime.ts", "relevance": 3 },
+        { "path": "src/context.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-015",
+      "query": "update JSX hooks like useState and useEffect",
+      "expected_files": [
+        { "path": "src/jsx/hooks/index.ts", "relevance": 3 },
+        { "path": "src/jsx/base.ts", "relevance": 2 },
+        { "path": "src/jsx/dom/index.ts", "relevance": 1 },
+        { "path": "src/jsx/constants.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-016",
+      "query": "improve runtime detection and adapter environment",
+      "expected_files": [
+        { "path": "src/helper/adapter/index.ts", "relevance": 3 },
+        { "path": "src/context.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-017",
+      "query": "fix CloudFront Lambda@Edge request handling",
+      "expected_files": [
+        { "path": "src/adapter/lambda-edge/handler.ts", "relevance": 3 },
+        { "path": "src/adapter/aws-lambda/handler.ts", "relevance": 1 },
+        { "path": "src/hono.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-018",
+      "query": "add SHA-256 hashing and cryptographic utilities",
+      "expected_files": [
+        { "path": "src/utils/crypto.ts", "relevance": 3 },
+        { "path": "src/utils/encode.ts", "relevance": 2 }
+      ]
+    },
+    {
+      "id": "hono-019",
+      "query": "fix JSX context provider and consumer pattern",
+      "expected_files": [
+        { "path": "src/jsx/context.ts", "relevance": 3 },
+        { "path": "src/jsx/base.ts", "relevance": 2 },
+        { "path": "src/jsx/hooks/index.ts", "relevance": 1 },
+        { "path": "src/jsx/constants.ts", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "hono-020",
+      "query": "update connection info and client IP detection",
+      "expected_files": [
+        { "path": "src/helper/conninfo/types.ts", "relevance": 3 },
+        { "path": "src/context.ts", "relevance": 1 },
+        { "path": "src/request.ts", "relevance": 1 }
+      ]
+    }
+  ]
+}

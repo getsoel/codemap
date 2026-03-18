@@ -9,6 +9,10 @@ license = "MIT"
 name = "codemap"
 path = "src/main.rs"
 
+[[bin]]
+name = "codemap-eval"
+path = "eval/src/main.rs"
+
 [dependencies]
 # Parsing & semantic analysis
 oxc = { version = "0.118", features = ["full"] }

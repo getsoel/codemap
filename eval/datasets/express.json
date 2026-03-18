@@ -1,0 +1,213 @@
+{
+  "repo": "express",
+  "language": "js/ts",
+  "commit": "latest",
+  "index_db": "fixtures/express/index.db",
+  "cases": [
+    {
+      "id": "exp-001",
+      "query": "add a new response helper method for sending XML",
+      "expected_files": [
+        { "path": "lib/response.js", "relevance": 3 },
+        { "path": "lib/utils.js", "relevance": 1 },
+        { "path": "test/res.send.js", "relevance": 2 },
+        { "path": "test/res.json.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-002",
+      "query": "fix cookie parsing and signed cookies",
+      "expected_files": [
+        { "path": "test/res.cookie.js", "relevance": 3 },
+        { "path": "test/req.signedCookies.js", "relevance": 3 },
+        { "path": "test/res.clearCookie.js", "relevance": 2 },
+        { "path": "lib/response.js", "relevance": 2 },
+        { "path": "lib/request.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-003",
+      "query": "improve route parameter validation",
+      "expected_files": [
+        { "path": "test/app.param.js", "relevance": 3 },
+        { "path": "test/app.route.js", "relevance": 2 },
+        { "path": "test/app.router.js", "relevance": 2 },
+        { "path": "test/Route.js", "relevance": 2 },
+        { "path": "test/Router.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-004",
+      "query": "change how request IP address and proxy trust works",
+      "expected_files": [
+        { "path": "test/req.ip.js", "relevance": 3 },
+        { "path": "test/req.ips.js", "relevance": 3 },
+        { "path": "lib/request.js", "relevance": 2 },
+        { "path": "test/req.secure.js", "relevance": 1 },
+        { "path": "test/req.protocol.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-005",
+      "query": "fix static file serving and downloads",
+      "expected_files": [
+        { "path": "test/express.static.js", "relevance": 3 },
+        { "path": "test/res.download.js", "relevance": 3 },
+        { "path": "test/res.sendFile.js", "relevance": 2 },
+        { "path": "lib/response.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-006",
+      "query": "update content negotiation and accept headers",
+      "expected_files": [
+        { "path": "test/req.accepts.js", "relevance": 3 },
+        { "path": "test/req.acceptsCharsets.js", "relevance": 2 },
+        { "path": "test/req.acceptsLanguages.js", "relevance": 2 },
+        { "path": "test/req.acceptsEncodings.js", "relevance": 2 },
+        { "path": "test/res.format.js", "relevance": 2 },
+        { "path": "test/acceptance/content-negotiation.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-007",
+      "query": "modify template rendering and view engine",
+      "expected_files": [
+        { "path": "lib/view.js", "relevance": 3 },
+        { "path": "test/app.render.js", "relevance": 3 },
+        { "path": "test/res.render.js", "relevance": 3 },
+        { "path": "test/app.engine.js", "relevance": 2 },
+        { "path": "lib/application.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-008",
+      "query": "add middleware for request body parsing",
+      "expected_files": [
+        { "path": "test/express.json.js", "relevance": 3 },
+        { "path": "test/express.urlencoded.js", "relevance": 3 },
+        { "path": "test/express.raw.js", "relevance": 2 },
+        { "path": "test/express.text.js", "relevance": 2 },
+        { "path": "test/middleware.basic.js", "relevance": 2 }
+      ]
+    },
+    {
+      "id": "exp-009",
+      "query": "fix redirect behavior and location header",
+      "expected_files": [
+        { "path": "test/res.redirect.js", "relevance": 3 },
+        { "path": "test/res.location.js", "relevance": 3 },
+        { "path": "lib/response.js", "relevance": 2 }
+      ]
+    },
+    {
+      "id": "exp-010",
+      "query": "update hostname and subdomain parsing",
+      "expected_files": [
+        { "path": "test/req.hostname.js", "relevance": 3 },
+        { "path": "test/req.host.js", "relevance": 3 },
+        { "path": "test/req.subdomains.js", "relevance": 3 },
+        { "path": "lib/request.js", "relevance": 2 }
+      ]
+    },
+    {
+      "id": "exp-011",
+      "query": "implement authentication example with sessions",
+      "expected_files": [
+        { "path": "examples/auth/index.js", "relevance": 3 },
+        { "path": "examples/cookie-sessions/index.js", "relevance": 2 },
+        { "path": "test/acceptance/auth.js", "relevance": 2 },
+        { "path": "test/acceptance/cookie-sessions.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-012",
+      "query": "fix JSON and JSONP response formatting",
+      "expected_files": [
+        { "path": "test/res.json.js", "relevance": 3 },
+        { "path": "test/res.jsonp.js", "relevance": 3 },
+        { "path": "lib/response.js", "relevance": 2 },
+        { "path": "test/express.json.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-013",
+      "query": "add support for HTTP HEAD and OPTIONS methods",
+      "expected_files": [
+        { "path": "test/app.head.js", "relevance": 3 },
+        { "path": "test/app.options.js", "relevance": 3 },
+        { "path": "test/app.all.js", "relevance": 2 },
+        { "path": "test/app.router.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-014",
+      "query": "improve error handling and error pages",
+      "expected_files": [
+        { "path": "test/app.routes.error.js", "relevance": 3 },
+        { "path": "examples/error-pages/index.js", "relevance": 3 },
+        { "path": "test/acceptance/error.js", "relevance": 2 },
+        { "path": "lib/application.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-015",
+      "query": "modify response headers and vary handling",
+      "expected_files": [
+        { "path": "test/res.set.js", "relevance": 3 },
+        { "path": "test/res.get.js", "relevance": 2 },
+        { "path": "test/res.vary.js", "relevance": 3 },
+        { "path": "test/res.append.js", "relevance": 2 },
+        { "path": "test/res.links.js", "relevance": 1 },
+        { "path": "lib/response.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-016",
+      "query": "update query string parsing configuration",
+      "expected_files": [
+        { "path": "test/req.query.js", "relevance": 3 },
+        { "path": "test/config.js", "relevance": 2 },
+        { "path": "lib/application.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-017",
+      "query": "fix multi-router and route separation patterns",
+      "expected_files": [
+        { "path": "examples/multi-router/index.js", "relevance": 3 },
+        { "path": "examples/route-separation/index.js", "relevance": 3 },
+        { "path": "test/acceptance/multi-router.js", "relevance": 2 },
+        { "path": "test/acceptance/route-separation.js", "relevance": 2 },
+        { "path": "test/Router.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-018",
+      "query": "improve virtual host support",
+      "expected_files": [
+        { "path": "examples/vhost/index.js", "relevance": 3 },
+        { "path": "test/acceptance/vhost.js", "relevance": 3 },
+        { "path": "test/req.hostname.js", "relevance": 1 }
+      ]
+    },
+    {
+      "id": "exp-019",
+      "query": "add response status code helpers",
+      "expected_files": [
+        { "path": "test/res.status.js", "relevance": 3 },
+        { "path": "test/res.sendStatus.js", "relevance": 3 },
+        { "path": "lib/response.js", "relevance": 2 }
+      ]
+    },
+    {
+      "id": "exp-020",
+      "query": "update exports and module entry point",
+      "expected_files": [
+        { "path": "test/exports.js", "relevance": 3 },
+        { "path": "lib/express.js", "relevance": 3 },
+        { "path": "test/app.js", "relevance": 1 }
+      ]
+    }
+  ]
+}
