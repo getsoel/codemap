@@ -1,9 +1,9 @@
 # codemap-eval — common evaluation workflows
 #
 # Usage:
-#   make eval              Run Layer 2 scorer eval on all datasets
-#   make eval-hono         Run Layer 2 on a single dataset
-#   make ab REPO=~/hono    Run Layer 3 A/B eval (requires ANTHROPIC_API_KEY)
+#   make eval              Run scorer eval on all datasets
+#   make eval-hono         Run scorer eval on a single dataset
+#   make e2e REPO=~/hono   Run e2e eval with real Claude Code CLI
 #   make history           List archived eval runs
 
 BIN       := ../target/release/codemap-eval
@@ -11,11 +11,10 @@ DATASETS  := datasets
 FIXTURES  := fixtures
 SCRIPTS   := scripts
 
-# Layer 3 defaults (override on command line)
+# E2E defaults (override on command line)
 REPO      ?=
 MODEL     ?= claude-sonnet-4-20250514
 MAX_TURNS ?= 15
-MAX_TOKENS?= 50000
 VARIANT   ?= both
 CASES     ?=
 
@@ -51,37 +50,8 @@ eval-tldraw: build ## Run scorer eval on tldraw dataset only
 compare: build ## Compare current scorer results against last archived run
 	$(BIN) compare --dataset $(DATASETS)
 
-# ---------- Layer 3a: Claude Code A/B (simulation) ----------
+# ---------- End-to-end Claude Code eval ----------
 
-.PHONY: ab
-ab: build ## Run A/B eval via API simulation (set REPO=/path/to/checkout)
-ifndef REPO
-	$(error REPO is required. Usage: make ab REPO=~/hono DATASET=datasets/hono.json)
-endif
-	$(BIN) ab \
-		--dataset $(or $(DATASET),$(DATASETS)) \
-		--repo-dir $(REPO) \
-		--model $(MODEL) \
-		--max-turns $(MAX_TURNS) \
-		--max-tokens $(MAX_TOKENS) \
-		--variant $(VARIANT) \
-		$(if $(CASES),--cases $(CASES))
-
-.PHONY: ab-control
-ab-control: VARIANT = control
-ab-control: ab ## Run A/B eval — control variant only
-
-.PHONY: ab-treatment
-ab-treatment: VARIANT = treatment
-ab-treatment: ab ## Run A/B eval — treatment variant only
-
-.PHONY: ab-cheap
-ab-cheap: MODEL = claude-haiku-4-5-20251001
-ab-cheap: ab ## Run A/B eval with Haiku (cheaper, faster iteration)
-
-# ---------- Layer 3b: End-to-end Claude Code eval ----------
-
-# E2E defaults (override on command line)
 TIMEOUT   ?= 300
 
 .PHONY: e2e

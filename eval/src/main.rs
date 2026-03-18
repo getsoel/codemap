@@ -1,12 +1,9 @@
 /// codemap-eval: evaluate scorer relevance quality and track results over time.
-mod ab;
-mod claude_client;
 mod e2e;
 mod history;
 mod metrics;
 mod report;
 mod session;
-mod tools;
 mod workspace;
 
 use anyhow::{Context, Result};
@@ -61,41 +58,6 @@ enum Commands {
         limit: usize,
     },
 
-    /// Run A/B eval: Claude Code with vs without codemap tools (simulation)
-    Ab {
-        /// Path to dataset JSON file (or directory of datasets)
-        #[arg(short, long)]
-        dataset: PathBuf,
-
-        /// Path to a local checkout of the repository
-        #[arg(long)]
-        repo_dir: PathBuf,
-
-        /// Claude model to use
-        #[arg(long, default_value = "claude-sonnet-4-20250514")]
-        model: String,
-
-        /// Max conversation turns per session
-        #[arg(long, default_value_t = 15)]
-        max_turns: usize,
-
-        /// Max input tokens per session
-        #[arg(long, default_value_t = 50000)]
-        max_tokens: usize,
-
-        /// Run specific case IDs only (comma-separated)
-        #[arg(long)]
-        cases: Option<String>,
-
-        /// Run only control, treatment, or both
-        #[arg(long, value_enum, default_value_t = ab::Variant::Both)]
-        variant: ab::Variant,
-
-        /// Skip archiving results to history.db
-        #[arg(long)]
-        no_archive: bool,
-    },
-
     /// Run end-to-end eval using real Claude Code CLI sessions
     E2e {
         /// Path to dataset JSON file (or directory of datasets)
@@ -123,8 +85,8 @@ enum Commands {
         cases: Option<String>,
 
         /// Run only control, treatment, or both
-        #[arg(long, value_enum, default_value_t = ab::Variant::Both)]
-        variant: ab::Variant,
+        #[arg(long, value_enum, default_value_t = e2e::Variant::Both)]
+        variant: e2e::Variant,
 
         /// Skip archiving results to history.db
         #[arg(long)]
@@ -176,25 +138,6 @@ fn main() -> Result<()> {
         } => run_eval(&dataset, &format, no_archive),
         Commands::Compare { dataset, against } => run_compare(&dataset, against.as_deref()),
         Commands::History { dataset, limit } => run_history(dataset.as_deref(), limit),
-        Commands::Ab {
-            dataset,
-            repo_dir,
-            model,
-            max_turns,
-            max_tokens,
-            cases,
-            variant,
-            no_archive,
-        } => ab::run_ab_eval(
-            &dataset,
-            &repo_dir,
-            &model,
-            max_turns,
-            max_tokens,
-            cases.as_deref(),
-            variant,
-            no_archive,
-        ),
         Commands::E2e {
             dataset,
             repo_dir,

@@ -7,11 +7,19 @@ use crate::history;
 use crate::session::{self, SessionMetrics};
 use crate::workspace;
 use anyhow::{Context, Result, ensure};
+use clap::ValueEnum;
 use codemap::db;
 use serde_json::json;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Variant {
+    Both,
+    Control,
+    Treatment,
+}
 
 const TASK_PROMPT_TEMPLATE: &str = "\
 Your task: {query}
@@ -73,7 +81,7 @@ pub fn run_e2e_eval(
     max_turns: usize,
     timeout_secs: u64,
     cases_filter: Option<&str>,
-    variant: crate::ab::Variant,
+    variant: Variant,
     no_archive: bool,
     verbose: bool,
 ) -> Result<()> {
@@ -139,10 +147,7 @@ pub fn run_e2e_eval(
             eprintln!("\n  {} - {}", case.id, case.query);
 
             // Run control
-            let control = if matches!(
-                variant,
-                crate::ab::Variant::Both | crate::ab::Variant::Control
-            ) {
+            let control = if matches!(variant, Variant::Both | Variant::Control) {
                 eprintln!("    Running control...");
                 match run_session_variant(
                     &repo_dir,
@@ -169,10 +174,7 @@ pub fn run_e2e_eval(
             };
 
             // Run treatment
-            let treatment = if matches!(
-                variant,
-                crate::ab::Variant::Both | crate::ab::Variant::Treatment
-            ) {
+            let treatment = if matches!(variant, Variant::Both | Variant::Treatment) {
                 eprintln!("    Running treatment...");
                 match run_session_variant(
                     &repo_dir,

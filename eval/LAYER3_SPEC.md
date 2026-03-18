@@ -13,7 +13,7 @@ The previous Layer 3 design called the Claude API directly with custom tool sche
 - The real hook integration where `codemap instructions` injects context at session start
 - How codemap's `map` output competes for attention with Claude Code's own context management
 
-The existing simulation code (`ab.rs`, `claude_client.rs`, `tools.rs`) remains available as a cheaper, faster approximation. This spec describes the real thing.
+The previous simulation code (which called the API directly) has been removed in favor of this real end-to-end approach.
 
 ## Prerequisites
 
@@ -228,14 +228,14 @@ End-to-End Eval: hono (20 tasks, model: claude-sonnet-4-20250514)
 
 ```
 eval/src/
-  e2e.rs           # End-to-end eval orchestration (replaces ab.rs role)
+  e2e.rs           # End-to-end eval orchestration
   session.rs       # Spawn claude CLI, parse stream-json output
   workspace.rs     # Temp directory setup, fixture copying
 ```
 
 ### CLI integration
 
-Replaces the `Ab` subcommand (or adds a new one alongside it):
+The `E2e` subcommand:
 
 ```
 codemap-eval e2e --dataset eval/datasets/hono.json --repo-dir ~/hono [OPTIONS]
