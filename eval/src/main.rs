@@ -65,7 +65,7 @@ enum Commands {
         dataset: PathBuf,
 
         /// Claude model to use
-        #[arg(long, default_value = "claude-sonnet-4-20250514")]
+        #[arg(long, default_value = "sonnet")]
         model: String,
 
         /// Max Claude Code turns per session

@@ -12,7 +12,7 @@ FIXTURES  := fixtures
 SCRIPTS   := scripts
 
 # E2E defaults (override on command line)
-MODEL     ?= claude-opus-4-6-20250514
+MODEL     ?= opus
 MAX_TURNS ?= 15
 VARIANT   ?= both
 CASES     ?=
@@ -71,7 +71,7 @@ e2e-treatment: VARIANT = treatment
 e2e-treatment: e2e ## Run e2e eval — treatment variant only
 
 .PHONY: e2e-cheap
-e2e-cheap: MODEL = claude-haiku-4-5-20251001
+e2e-cheap: MODEL = haiku
 e2e-cheap: e2e ## Run e2e eval with Haiku (cheaper, faster iteration)
 
 .PHONY: e2e-verbose

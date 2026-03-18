@@ -265,6 +265,12 @@ fn run_session_variant(
         eprintln!("    [{label} exit code]: {:?}", raw.exit_code);
         eprintln!("    [{label} stderr]: {}", truncate(&raw.stderr, 500));
         eprintln!("    [{label} stdout lines]: {}", raw.stdout.lines().count());
+        if raw.exit_code != Some(0) {
+            // Dump first few lines of stdout for debugging failed sessions
+            for line in raw.stdout.lines().take(5) {
+                eprintln!("    [{label} stdout]: {}", truncate(line, 200));
+            }
+        }
     }
 
     // Always verify hook injection for treatment sessions
