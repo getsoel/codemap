@@ -60,53 +60,75 @@ struct DatasetReport {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
+struct VariantMetrics {
+    avg_recall: f64,
+    avg_precision: f64,
+    avg_ndcg: f64,
+    avg_tool_calls: f64,
+    avg_input_tokens: f64,
+    avg_output_tokens: f64,
+    avg_wall_time_ms: f64,
+    avg_codemap_calls: f64,
+    avg_first_relevant: f64,
+    #[serde(skip)]
+    first_relevant_count: usize,
+}
+
+impl VariantMetrics {
+    fn accumulate(&mut self, m: &SessionMetrics, expected: &HashMap<String, u8>) {
+        let expected_set: HashSet<String> = expected.keys().cloned().collect();
+        let files = best_file_set(m);
+        self.avg_recall += recall(&files, &expected_set);
+        self.avg_precision += precision_from_identified(&m.files_identified, &expected_set);
+        self.avg_ndcg += ndcg_at_k(&m.files_identified, expected, 10);
+        self.avg_tool_calls += m.tool_calls as f64;
+        self.avg_input_tokens += m.input_tokens as f64;
+        self.avg_output_tokens += m.output_tokens as f64;
+        self.avg_wall_time_ms += m.wall_clock_ms as f64;
+        self.avg_codemap_calls += m.codemap_calls as f64;
+        if let Some(turn) = m.first_relevant_file_turn {
+            self.avg_first_relevant += turn as f64;
+            self.first_relevant_count += 1;
+        }
+    }
+
+    fn finalize(&mut self, n: f64) {
+        self.avg_recall /= n;
+        self.avg_precision /= n;
+        self.avg_ndcg /= n;
+        self.avg_tool_calls /= n;
+        self.avg_input_tokens /= n;
+        self.avg_output_tokens /= n;
+        self.avg_wall_time_ms /= n;
+        self.avg_codemap_calls /= n;
+        if self.first_relevant_count > 0 {
+            self.avg_first_relevant /= self.first_relevant_count as f64;
+        }
+    }
+
+    fn total_tokens(&self) -> f64 {
+        self.avg_input_tokens + self.avg_output_tokens
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize)]
 struct E2eAggregate {
     count: usize,
+    control: VariantMetrics,
+    treatment: VariantMetrics,
+    enriched: VariantMetrics,
 
-    // Recall & precision
-    avg_control_recall: f64,
-    avg_treatment_recall: f64,
-    avg_enriched_recall: f64,
-    avg_control_precision: f64,
-    avg_treatment_precision: f64,
-    avg_enriched_precision: f64,
-
-    // NDCG (graded relevance)
-    avg_control_ndcg: f64,
-    avg_treatment_ndcg: f64,
-    avg_enriched_ndcg: f64,
-
-    // Efficiency
-    avg_control_tool_calls: f64,
-    avg_treatment_tool_calls: f64,
-    avg_enriched_tool_calls: f64,
+    // Reduction percentages (treatment vs control)
     tool_call_reduction_pct: f64,
-    avg_control_input_tokens: f64,
-    avg_control_output_tokens: f64,
-    avg_treatment_input_tokens: f64,
-    avg_treatment_output_tokens: f64,
-    avg_enriched_input_tokens: f64,
-    avg_enriched_output_tokens: f64,
     token_reduction_pct: f64,
-    avg_control_wall_time_ms: f64,
-    avg_treatment_wall_time_ms: f64,
-    avg_enriched_wall_time_ms: f64,
     time_reduction_pct: f64,
+
+    // Reduction percentages (enriched vs control)
     enriched_tool_call_reduction_pct: f64,
     enriched_token_reduction_pct: f64,
     enriched_time_reduction_pct: f64,
 
-    // Codemap usage
-    avg_control_codemap_calls: f64,
-    avg_treatment_codemap_calls: f64,
-    avg_enriched_codemap_calls: f64,
-
-    // Speed
-    avg_control_first_relevant: f64,
-    avg_treatment_first_relevant: f64,
-    avg_enriched_first_relevant: f64,
-
-    // Wins (control vs treatment when no enriched; three-way when all present)
+    // Wins
     treatment_wins: usize,
     control_wins: usize,
     enriched_wins: usize,
@@ -663,110 +685,36 @@ impl E2eAggregate {
         expected: &HashMap<String, u8>,
         kind: workspace::WorkspaceKind,
     ) {
-        let expected_set: HashSet<String> = expected.keys().cloned().collect();
-        let files = best_file_set(m);
-        let r = recall(&files, &expected_set);
-        let p = precision_from_identified(&m.files_identified, &expected_set);
-        let ndcg = ndcg_at_k(&m.files_identified, expected, 10);
-
-        match kind {
-            workspace::WorkspaceKind::Control => {
-                self.avg_control_recall += r;
-                self.avg_control_precision += p;
-                self.avg_control_ndcg += ndcg;
-                self.avg_control_tool_calls += m.tool_calls as f64;
-                self.avg_control_input_tokens += m.input_tokens as f64;
-                self.avg_control_output_tokens += m.output_tokens as f64;
-                self.avg_control_wall_time_ms += m.wall_clock_ms as f64;
-                self.avg_control_codemap_calls += m.codemap_calls as f64;
-            }
-            workspace::WorkspaceKind::Treatment => {
-                self.avg_treatment_recall += r;
-                self.avg_treatment_precision += p;
-                self.avg_treatment_ndcg += ndcg;
-                self.avg_treatment_tool_calls += m.tool_calls as f64;
-                self.avg_treatment_input_tokens += m.input_tokens as f64;
-                self.avg_treatment_output_tokens += m.output_tokens as f64;
-                self.avg_treatment_wall_time_ms += m.wall_clock_ms as f64;
-                self.avg_treatment_codemap_calls += m.codemap_calls as f64;
-            }
-            workspace::WorkspaceKind::Enriched => {
-                self.avg_enriched_recall += r;
-                self.avg_enriched_precision += p;
-                self.avg_enriched_ndcg += ndcg;
-                self.avg_enriched_tool_calls += m.tool_calls as f64;
-                self.avg_enriched_input_tokens += m.input_tokens as f64;
-                self.avg_enriched_output_tokens += m.output_tokens as f64;
-                self.avg_enriched_wall_time_ms += m.wall_clock_ms as f64;
-                self.avg_enriched_codemap_calls += m.codemap_calls as f64;
-            }
-        }
+        let variant = match kind {
+            workspace::WorkspaceKind::Control => &mut self.control,
+            workspace::WorkspaceKind::Treatment => &mut self.treatment,
+            workspace::WorkspaceKind::Enriched => &mut self.enriched,
+        };
+        variant.accumulate(m, expected);
     }
 
     /// Divide all running sums by n to produce averages, then compute reduction percentages.
-    fn finalize(
-        &mut self,
-        n: usize,
-        c_first_count: usize,
-        t_first_count: usize,
-        e_first_count: usize,
-    ) {
+    fn finalize(&mut self, n: usize) {
         let nf = n as f64;
-        self.avg_control_recall /= nf;
-        self.avg_treatment_recall /= nf;
-        self.avg_enriched_recall /= nf;
-        self.avg_control_precision /= nf;
-        self.avg_treatment_precision /= nf;
-        self.avg_enriched_precision /= nf;
-        self.avg_control_ndcg /= nf;
-        self.avg_treatment_ndcg /= nf;
-        self.avg_enriched_ndcg /= nf;
-        self.avg_control_tool_calls /= nf;
-        self.avg_treatment_tool_calls /= nf;
-        self.avg_enriched_tool_calls /= nf;
-        self.avg_control_input_tokens /= nf;
-        self.avg_control_output_tokens /= nf;
-        self.avg_treatment_input_tokens /= nf;
-        self.avg_treatment_output_tokens /= nf;
-        self.avg_enriched_input_tokens /= nf;
-        self.avg_enriched_output_tokens /= nf;
-        self.avg_control_wall_time_ms /= nf;
-        self.avg_treatment_wall_time_ms /= nf;
-        self.avg_enriched_wall_time_ms /= nf;
-        self.avg_control_codemap_calls /= nf;
-        self.avg_treatment_codemap_calls /= nf;
-        self.avg_enriched_codemap_calls /= nf;
-
-        if c_first_count > 0 {
-            self.avg_control_first_relevant /= c_first_count as f64;
-        }
-        if t_first_count > 0 {
-            self.avg_treatment_first_relevant /= t_first_count as f64;
-        }
-        if e_first_count > 0 {
-            self.avg_enriched_first_relevant /= e_first_count as f64;
-        }
-
-        let control_total_tokens = self.avg_control_input_tokens + self.avg_control_output_tokens;
-        let treatment_total_tokens =
-            self.avg_treatment_input_tokens + self.avg_treatment_output_tokens;
-        let enriched_total_tokens =
-            self.avg_enriched_input_tokens + self.avg_enriched_output_tokens;
+        self.control.finalize(nf);
+        self.treatment.finalize(nf);
+        self.enriched.finalize(nf);
 
         self.tool_call_reduction_pct =
-            reduction_pct(self.avg_control_tool_calls, self.avg_treatment_tool_calls);
-        self.token_reduction_pct = reduction_pct(control_total_tokens, treatment_total_tokens);
+            reduction_pct(self.control.avg_tool_calls, self.treatment.avg_tool_calls);
+        self.token_reduction_pct =
+            reduction_pct(self.control.total_tokens(), self.treatment.total_tokens());
         self.time_reduction_pct = reduction_pct(
-            self.avg_control_wall_time_ms,
-            self.avg_treatment_wall_time_ms,
+            self.control.avg_wall_time_ms,
+            self.treatment.avg_wall_time_ms,
         );
         self.enriched_tool_call_reduction_pct =
-            reduction_pct(self.avg_control_tool_calls, self.avg_enriched_tool_calls);
+            reduction_pct(self.control.avg_tool_calls, self.enriched.avg_tool_calls);
         self.enriched_token_reduction_pct =
-            reduction_pct(control_total_tokens, enriched_total_tokens);
+            reduction_pct(self.control.total_tokens(), self.enriched.total_tokens());
         self.enriched_time_reduction_pct = reduction_pct(
-            self.avg_control_wall_time_ms,
-            self.avg_enriched_wall_time_ms,
+            self.control.avg_wall_time_ms,
+            self.enriched.avg_wall_time_ms,
         );
     }
 }
@@ -789,31 +737,15 @@ fn compute_aggregate(results: &[TaskResult]) -> E2eAggregate {
         count: n,
         ..Default::default()
     };
-    let mut c_first_count = 0usize;
-    let mut t_first_count = 0usize;
-    let mut e_first_count = 0usize;
-
     for r in &multi {
         if let Some(c) = &r.control {
             agg.accumulate(c, &r.expected, workspace::WorkspaceKind::Control);
-            if let Some(turn) = c.first_relevant_file_turn {
-                agg.avg_control_first_relevant += turn as f64;
-                c_first_count += 1;
-            }
         }
         if let Some(t) = &r.treatment {
             agg.accumulate(t, &r.expected, workspace::WorkspaceKind::Treatment);
-            if let Some(turn) = t.first_relevant_file_turn {
-                agg.avg_treatment_first_relevant += turn as f64;
-                t_first_count += 1;
-            }
         }
         if let Some(e) = &r.enriched {
             agg.accumulate(e, &r.expected, workspace::WorkspaceKind::Enriched);
-            if let Some(turn) = e.first_relevant_file_turn {
-                agg.avg_enriched_first_relevant += turn as f64;
-                e_first_count += 1;
-            }
         }
 
         match multi_case_winner(
@@ -845,7 +777,7 @@ fn compute_aggregate(results: &[TaskResult]) -> E2eAggregate {
         }
     }
 
-    agg.finalize(n, c_first_count, t_first_count, e_first_count);
+    agg.finalize(n);
     agg
 }
 
@@ -872,7 +804,7 @@ fn compute_single_variant_aggregate(results: &[TaskResult]) -> E2eAggregate {
         }
     }
 
-    agg.finalize(n, 0, 0, 0);
+    agg.finalize(n);
     agg
 }
 
@@ -929,10 +861,10 @@ fn print_e2e_report(
         // Recall
         print_metric_row(
             "Recall",
-            agg.avg_control_recall,
-            agg.avg_treatment_recall,
+            agg.control.avg_recall,
+            agg.treatment.avg_recall,
             if show_enriched {
-                Some(agg.avg_enriched_recall)
+                Some(agg.enriched.avg_recall)
             } else {
                 None
             },
@@ -940,10 +872,10 @@ fn print_e2e_report(
         // Precision
         print_metric_row(
             "Precision",
-            agg.avg_control_precision,
-            agg.avg_treatment_precision,
+            agg.control.avg_precision,
+            agg.treatment.avg_precision,
             if show_enriched {
-                Some(agg.avg_enriched_precision)
+                Some(agg.enriched.avg_precision)
             } else {
                 None
             },
@@ -951,10 +883,10 @@ fn print_e2e_report(
         // NDCG@10
         print_metric_row(
             "NDCG@10",
-            agg.avg_control_ndcg,
-            agg.avg_treatment_ndcg,
+            agg.control.avg_ndcg,
+            agg.treatment.avg_ndcg,
             if show_enriched {
-                Some(agg.avg_enriched_ndcg)
+                Some(agg.enriched.avg_ndcg)
             } else {
                 None
             },
@@ -964,9 +896,9 @@ fn print_e2e_report(
             println!(
                 "  {:20} {:>10.1} {:>10.1} {:>10.1} {:>+9.0}% {:>+9.0}%",
                 "Tool calls",
-                agg.avg_control_tool_calls,
-                agg.avg_treatment_tool_calls,
-                agg.avg_enriched_tool_calls,
+                agg.control.avg_tool_calls,
+                agg.treatment.avg_tool_calls,
+                agg.enriched.avg_tool_calls,
                 -agg.tool_call_reduction_pct,
                 -agg.enriched_tool_call_reduction_pct,
             );
@@ -974,8 +906,8 @@ fn print_e2e_report(
             println!(
                 "  {:20} {:>10.1} {:>10.1} {:>+9.0}%",
                 "Tool calls",
-                agg.avg_control_tool_calls,
-                agg.avg_treatment_tool_calls,
+                agg.control.avg_tool_calls,
+                agg.treatment.avg_tool_calls,
                 -agg.tool_call_reduction_pct,
             );
         }
@@ -984,19 +916,19 @@ fn print_e2e_report(
             println!(
                 "  {:20} {:>9.1}k {:>9.1}k {:>9.1}k {:>+9.0}% {:>+9.0}%",
                 "Input tokens",
-                agg.avg_control_input_tokens / 1000.0,
-                agg.avg_treatment_input_tokens / 1000.0,
-                agg.avg_enriched_input_tokens / 1000.0,
-                -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
-                -reduction_pct(agg.avg_control_input_tokens, agg.avg_enriched_input_tokens),
+                agg.control.avg_input_tokens / 1000.0,
+                agg.treatment.avg_input_tokens / 1000.0,
+                agg.enriched.avg_input_tokens / 1000.0,
+                -reduction_pct(agg.control.avg_input_tokens, agg.treatment.avg_input_tokens),
+                -reduction_pct(agg.control.avg_input_tokens, agg.enriched.avg_input_tokens),
             );
         } else {
             println!(
                 "  {:20} {:>9.1}k {:>9.1}k {:>+9.0}%",
                 "Input tokens",
-                agg.avg_control_input_tokens / 1000.0,
-                agg.avg_treatment_input_tokens / 1000.0,
-                -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
+                agg.control.avg_input_tokens / 1000.0,
+                agg.treatment.avg_input_tokens / 1000.0,
+                -reduction_pct(agg.control.avg_input_tokens, agg.treatment.avg_input_tokens),
             );
         }
         // Tokens (output)
@@ -1004,27 +936,27 @@ fn print_e2e_report(
             println!(
                 "  {:20} {:>9.1}k {:>9.1}k {:>9.1}k {:>+9.0}% {:>+9.0}%",
                 "Output tokens",
-                agg.avg_control_output_tokens / 1000.0,
-                agg.avg_treatment_output_tokens / 1000.0,
-                agg.avg_enriched_output_tokens / 1000.0,
+                agg.control.avg_output_tokens / 1000.0,
+                agg.treatment.avg_output_tokens / 1000.0,
+                agg.enriched.avg_output_tokens / 1000.0,
                 -reduction_pct(
-                    agg.avg_control_output_tokens,
-                    agg.avg_treatment_output_tokens
+                    agg.control.avg_output_tokens,
+                    agg.treatment.avg_output_tokens
                 ),
                 -reduction_pct(
-                    agg.avg_control_output_tokens,
-                    agg.avg_enriched_output_tokens
+                    agg.control.avg_output_tokens,
+                    agg.enriched.avg_output_tokens
                 ),
             );
         } else {
             println!(
                 "  {:20} {:>9.1}k {:>9.1}k {:>+9.0}%",
                 "Output tokens",
-                agg.avg_control_output_tokens / 1000.0,
-                agg.avg_treatment_output_tokens / 1000.0,
+                agg.control.avg_output_tokens / 1000.0,
+                agg.treatment.avg_output_tokens / 1000.0,
                 -reduction_pct(
-                    agg.avg_control_output_tokens,
-                    agg.avg_treatment_output_tokens
+                    agg.control.avg_output_tokens,
+                    agg.treatment.avg_output_tokens
                 ),
             );
         }
@@ -1033,9 +965,9 @@ fn print_e2e_report(
             println!(
                 "  {:20} {:>9.1}s {:>9.1}s {:>9.1}s {:>+9.0}% {:>+9.0}%",
                 "Wall time",
-                agg.avg_control_wall_time_ms / 1000.0,
-                agg.avg_treatment_wall_time_ms / 1000.0,
-                agg.avg_enriched_wall_time_ms / 1000.0,
+                agg.control.avg_wall_time_ms / 1000.0,
+                agg.treatment.avg_wall_time_ms / 1000.0,
+                agg.enriched.avg_wall_time_ms / 1000.0,
                 -agg.time_reduction_pct,
                 -agg.enriched_time_reduction_pct,
             );
@@ -1043,8 +975,8 @@ fn print_e2e_report(
             println!(
                 "  {:20} {:>9.1}s {:>9.1}s {:>+9.0}%",
                 "Wall time",
-                agg.avg_control_wall_time_ms / 1000.0,
-                agg.avg_treatment_wall_time_ms / 1000.0,
+                agg.control.avg_wall_time_ms / 1000.0,
+                agg.treatment.avg_wall_time_ms / 1000.0,
                 -agg.time_reduction_pct,
             );
         }
@@ -1053,14 +985,14 @@ fn print_e2e_report(
             println!(
                 "  {:20} {:>10.1} {:>10.1} {:>10.1}",
                 "Codemap calls",
-                agg.avg_control_codemap_calls,
-                agg.avg_treatment_codemap_calls,
-                agg.avg_enriched_codemap_calls,
+                agg.control.avg_codemap_calls,
+                agg.treatment.avg_codemap_calls,
+                agg.enriched.avg_codemap_calls,
             );
         } else {
             println!(
                 "  {:20} {:>10.1} {:>10.1}",
-                "Codemap calls", agg.avg_control_codemap_calls, agg.avg_treatment_codemap_calls,
+                "Codemap calls", agg.control.avg_codemap_calls, agg.treatment.avg_codemap_calls,
             );
         }
 
@@ -1271,46 +1203,46 @@ fn write_dataset_section(
         md_row(
             md,
             "Recall",
-            agg.avg_control_recall,
-            agg.avg_treatment_recall,
-            e(agg.avg_enriched_recall),
+            agg.control.avg_recall,
+            agg.treatment.avg_recall,
+            e(agg.enriched.avg_recall),
             "pct",
         );
         md_row(
             md,
             "Precision",
-            agg.avg_control_precision,
-            agg.avg_treatment_precision,
-            e(agg.avg_enriched_precision),
+            agg.control.avg_precision,
+            agg.treatment.avg_precision,
+            e(agg.enriched.avg_precision),
             "pct",
         );
         md_row(
             md,
             "NDCG@10",
-            agg.avg_control_ndcg,
-            agg.avg_treatment_ndcg,
-            e(agg.avg_enriched_ndcg),
+            agg.control.avg_ndcg,
+            agg.treatment.avg_ndcg,
+            e(agg.enriched.avg_ndcg),
             "pct",
         );
         md_row(
             md,
             "Tool calls",
-            agg.avg_control_tool_calls,
-            agg.avg_treatment_tool_calls,
-            e(agg.avg_enriched_tool_calls),
+            agg.control.avg_tool_calls,
+            agg.treatment.avg_tool_calls,
+            e(agg.enriched.avg_tool_calls),
             "num",
         );
 
         // Token rows with "k" suffix need custom formatting
-        let ctrl_in = agg.avg_control_input_tokens / 1000.0;
-        let treat_in = agg.avg_treatment_input_tokens / 1000.0;
-        let enrich_in = agg.avg_enriched_input_tokens / 1000.0;
-        let ctrl_out = agg.avg_control_output_tokens / 1000.0;
-        let treat_out = agg.avg_treatment_output_tokens / 1000.0;
-        let enrich_out = agg.avg_enriched_output_tokens / 1000.0;
-        let ctrl_wall = agg.avg_control_wall_time_ms / 1000.0;
-        let treat_wall = agg.avg_treatment_wall_time_ms / 1000.0;
-        let enrich_wall = agg.avg_enriched_wall_time_ms / 1000.0;
+        let ctrl_in = agg.control.avg_input_tokens / 1000.0;
+        let treat_in = agg.treatment.avg_input_tokens / 1000.0;
+        let enrich_in = agg.enriched.avg_input_tokens / 1000.0;
+        let ctrl_out = agg.control.avg_output_tokens / 1000.0;
+        let treat_out = agg.treatment.avg_output_tokens / 1000.0;
+        let enrich_out = agg.enriched.avg_output_tokens / 1000.0;
+        let ctrl_wall = agg.control.avg_wall_time_ms / 1000.0;
+        let treat_wall = agg.treatment.avg_wall_time_ms / 1000.0;
+        let enrich_wall = agg.enriched.avg_wall_time_ms / 1000.0;
 
         if show_enriched {
             writeln!(md, "| Input tokens | {ctrl_in:.1}k | {treat_in:.1}k | {enrich_in:.1}k | {:+.0}% | {:+.0}% |", pct_change(ctrl_in, treat_in), pct_change(ctrl_in, enrich_in)).unwrap();

@@ -85,6 +85,12 @@ smoke: DATASET = $(DATASETS)/hono.json
 smoke: CASES = hono-001
 smoke: e2e ## Quick smoke test — 1 case, all variants, Haiku, 3 turns
 
+.PHONY: smoke-deep
+smoke-deep: MODEL = haiku
+smoke-deep: DATASET = $(DATASETS)/hono.json
+smoke-deep: CASES = hono-012
+smoke-deep: e2e ## Smoke test with a case that requires codemap commands to solve
+
 .PHONY: e2e-cheap
 e2e-cheap: MODEL = haiku
 e2e-cheap: e2e ## Run e2e eval with Haiku (cheaper, faster iteration)
