@@ -37,3 +37,9 @@ make history                                # list archived runs
 Treatment sessions run `codemap setup --no-post-hook` in each workspace to write the SessionStart hook to `.claude/settings.local.json`. Claude Code picks it up naturally — no `--append-system-prompt`.
 
 Enriched sessions additionally run `codemap enrich --api` after setup, adding LLM-generated file summaries to the index. Requires `GEMINI_API_KEY` or `ANTHROPIC_API_KEY`.
+
+## Eval analysis
+
+- **"Name-obvious" cases don't differentiate variants.** When expected files rank highly in PageRank and file names directly match query keywords (e.g., "context object" → `context.ts`), all variants score equally. Prefer cases with a semantic gap between query and file names (e.g., "typed client" where `src/client/` is below the map cutoff).
+- **`avg_codemap_calls: 0` means Claude never used interactive commands** (`codemap context`, `codemap symbol`, `codemap deps`). The only codemap interaction was the SessionStart hook. This is a key diagnostic — if codemap calls are zero across treatment/enriched, the case only tests the injected map, not tool usage.
+- **`make smoke` vs `make smoke-deep`:** `smoke` (hono-001) tests the eval pipeline end-to-end with a trivial case. `smoke-deep` (hono-012) tests a case where expected files are below the PageRank cutoff, requiring Claude to actually invoke codemap commands to find them.
