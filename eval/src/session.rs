@@ -42,6 +42,9 @@ pub struct SessionMetrics {
     // Speed
     pub turns: usize,
     pub first_relevant_file_turn: Option<usize>,
+
+    // Hook status (treatment sessions only)
+    pub hook_injected: bool,
 }
 
 /// Spawn claude CLI and capture stream-json output.
@@ -166,6 +169,13 @@ pub fn parse_stream_output(
         let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
         match event_type {
+            // Hook output from `codemap instructions` appears in system events
+            "system" => {
+                let raw_line = line;
+                if raw_line.contains("codemap") {
+                    metrics.hook_injected = true;
+                }
+            }
             "assistant" => {
                 // Content blocks inside assistant messages contain both tool_use and text
                 let content = event

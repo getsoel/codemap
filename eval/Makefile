@@ -52,6 +52,9 @@ compare: build ## Compare current scorer results against last archived run
 
 # ---------- End-to-end Claude Code eval ----------
 
+# Extra flags (set by variant targets)
+E2E_FLAGS ?=
+
 .PHONY: e2e
 e2e: build ## Run e2e eval (repos auto-cloned from dataset repo_url)
 	$(BIN) e2e \
@@ -60,6 +63,7 @@ e2e: build ## Run e2e eval (repos auto-cloned from dataset repo_url)
 		--max-turns $(MAX_TURNS) \
 		--timeout $(TIMEOUT) \
 		--variant $(VARIANT) \
+		$(E2E_FLAGS) \
 		$(if $(CASES),--cases $(CASES))
 
 .PHONY: e2e-control
@@ -75,15 +79,13 @@ e2e-cheap: MODEL = haiku
 e2e-cheap: e2e ## Run e2e eval with Haiku (cheaper, faster iteration)
 
 .PHONY: e2e-verbose
-e2e-verbose: build ## Run e2e eval with verbose output
-	$(BIN) e2e \
-		--dataset $(or $(DATASET),$(DATASETS)) \
-		--model $(MODEL) \
-		--max-turns $(MAX_TURNS) \
-		--timeout $(TIMEOUT) \
-		--variant $(VARIANT) \
-		--verbose \
-		$(if $(CASES),--cases $(CASES))
+e2e-verbose: E2E_FLAGS = --verbose
+e2e-verbose: e2e ## Run e2e eval with verbose output
+
+.PHONY: report
+report: VARIANT = both
+report: DATASET =
+report: e2e ## Run full e2e benchmark on all datasets → RESULTS.md
 
 # ---------- history ----------
 

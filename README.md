@@ -182,6 +182,10 @@ codemap integrates with Claude Code through [hooks](https://docs.anthropic.com/e
 
 Run `codemap setup` to configure these automatically.
 
+## Performance
+
+See [eval/RESULTS.md](eval/RESULTS.md) for the latest e2e benchmark comparing Claude Code with and without codemap.
+
 ## Prompt recipes
 
 Ready-made prompt templates you can paste into Claude Code to run common analysis tasks against your indexed codebase:
