@@ -1,7 +1,7 @@
 {
   "repo": "express",
+  "repo_url": "https://github.com/expressjs/express",
   "language": "js/ts",
-  "commit": "latest",
   "index_db": "fixtures/express/index.db",
   "cases": [
     {

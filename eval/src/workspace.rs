@@ -96,6 +96,36 @@ fn run_codemap_map(codemap_bin: &Path, working_dir: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Ensure a repo checkout exists in `eval/repos/<name>`, cloning if necessary.
+///
+/// Returns the path to the checkout directory.
+pub fn ensure_repo(eval_dir: &Path, name: &str, repo_url: &str) -> Result<PathBuf> {
+    let repos_dir = eval_dir.join("repos");
+    std::fs::create_dir_all(&repos_dir)?;
+    let repo_dir = repos_dir.join(name);
+
+    if repo_dir.exists() {
+        eprintln!("Using cached repo: {}", repo_dir.display());
+    } else {
+        ensure!(
+            !repo_url.is_empty(),
+            "No repo_url in dataset and no cached checkout at {}.\n\
+             Add \"repo_url\": \"https://github.com/...\" to the dataset JSON.",
+            repo_dir.display()
+        );
+        eprintln!("Cloning {repo_url} into {}...", repo_dir.display());
+        let status = Command::new("git")
+            .args(["clone", "--depth", "1"])
+            .arg(repo_url)
+            .arg(&repo_dir)
+            .status()
+            .context("failed to run git clone")?;
+        ensure!(status.success(), "git clone failed for {repo_url}");
+    }
+
+    Ok(repo_dir)
+}
+
 /// Find the codemap binary next to the current executable, or in PATH.
 pub fn find_codemap_bin() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;

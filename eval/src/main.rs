@@ -64,10 +64,6 @@ enum Commands {
         #[arg(short, long)]
         dataset: PathBuf,
 
-        /// Path to a local checkout of the repository
-        #[arg(long)]
-        repo_dir: PathBuf,
-
         /// Claude model to use
         #[arg(long, default_value = "claude-sonnet-4-20250514")]
         model: String,
@@ -101,11 +97,10 @@ enum Commands {
 #[derive(serde::Deserialize)]
 pub(crate) struct EvalDataset {
     pub repo: String,
+    #[serde(default)]
+    pub repo_url: String,
     #[serde(default = "default_language")]
     pub language: String,
-    #[allow(dead_code)]
-    #[serde(default)]
-    pub commit: String,
     pub index_db: String,
     pub cases: Vec<EvalCase>,
 }
@@ -140,7 +135,6 @@ fn main() -> Result<()> {
         Commands::History { dataset, limit } => run_history(dataset.as_deref(), limit),
         Commands::E2e {
             dataset,
-            repo_dir,
             model,
             max_turns,
             timeout,
@@ -150,7 +144,6 @@ fn main() -> Result<()> {
             verbose,
         } => e2e::run_e2e_eval(
             &dataset,
-            &repo_dir,
             &model,
             max_turns,
             timeout,

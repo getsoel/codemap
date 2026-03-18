@@ -1,7 +1,7 @@
 {
   "repo": "tldraw",
+  "repo_url": "https://github.com/tldraw/tldraw",
   "language": "js/ts",
-  "commit": "latest",
   "index_db": "fixtures/tldraw/index.db",
   "cases": [
     {

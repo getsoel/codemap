@@ -1,7 +1,7 @@
 {
   "repo": "hono",
+  "repo_url": "https://github.com/honojs/hono",
   "language": "js/ts",
-  "commit": "latest",
   "index_db": "fixtures/hono/index.db",
   "cases": [
     {

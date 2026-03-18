@@ -76,7 +76,6 @@ struct E2eAggregate {
 #[allow(clippy::too_many_arguments)]
 pub fn run_e2e_eval(
     dataset_path: &Path,
-    repo_dir: &Path,
     model: &str,
     max_turns: usize,
     timeout_secs: u64,
@@ -101,10 +100,8 @@ pub fn run_e2e_eval(
         None
     };
 
-    let repo_dir = std::fs::canonicalize(repo_dir)
-        .with_context(|| format!("repo dir not found: {}", repo_dir.display()))?;
-
     for ds in &datasets {
+        let repo_dir = workspace::ensure_repo(&eval_dir, &ds.repo, &ds.repo_url)?;
         let db_source = eval_dir.join(&ds.index_db);
         if !db_source.exists() {
             eprintln!(

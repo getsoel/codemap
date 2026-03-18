@@ -3,7 +3,7 @@
 # Usage:
 #   make eval              Run scorer eval on all datasets
 #   make eval-hono         Run scorer eval on a single dataset
-#   make e2e REPO=~/hono   Run e2e eval with real Claude Code CLI
+#   make e2e               Run e2e eval with real Claude Code CLI
 #   make history           List archived eval runs
 
 BIN       := ../target/release/codemap-eval
@@ -12,11 +12,11 @@ FIXTURES  := fixtures
 SCRIPTS   := scripts
 
 # E2E defaults (override on command line)
-REPO      ?=
 MODEL     ?= claude-sonnet-4-20250514
 MAX_TURNS ?= 15
 VARIANT   ?= both
 CASES     ?=
+TIMEOUT   ?= 300
 
 # ---------- build ----------
 
@@ -24,7 +24,7 @@ CASES     ?=
 build: ## Build codemap + codemap-eval in release mode
 	cargo build --release
 
-# ---------- Layer 2: scorer quality ----------
+# ---------- scorer quality ----------
 
 .PHONY: eval
 eval: build ## Run scorer eval on all datasets
@@ -52,16 +52,10 @@ compare: build ## Compare current scorer results against last archived run
 
 # ---------- End-to-end Claude Code eval ----------
 
-TIMEOUT   ?= 300
-
 .PHONY: e2e
-e2e: build ## Run e2e eval with real Claude Code CLI (set REPO=/path/to/checkout)
-ifndef REPO
-	$(error REPO is required. Usage: make e2e REPO=~/hono DATASET=datasets/hono.json)
-endif
+e2e: build ## Run e2e eval (repos auto-cloned from dataset repo_url)
 	$(BIN) e2e \
 		--dataset $(or $(DATASET),$(DATASETS)) \
-		--repo-dir $(REPO) \
 		--model $(MODEL) \
 		--max-turns $(MAX_TURNS) \
 		--timeout $(TIMEOUT) \
@@ -82,12 +76,8 @@ e2e-cheap: e2e ## Run e2e eval with Haiku (cheaper, faster iteration)
 
 .PHONY: e2e-verbose
 e2e-verbose: build ## Run e2e eval with verbose output
-ifndef REPO
-	$(error REPO is required)
-endif
 	$(BIN) e2e \
 		--dataset $(or $(DATASET),$(DATASETS)) \
-		--repo-dir $(REPO) \
 		--model $(MODEL) \
 		--max-turns $(MAX_TURNS) \
 		--timeout $(TIMEOUT) \
