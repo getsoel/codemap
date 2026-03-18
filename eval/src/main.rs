@@ -1,7 +1,13 @@
 /// codemap-eval: evaluate scorer relevance quality and track results over time.
+mod ab;
+mod claude_client;
+mod e2e;
 mod history;
 mod metrics;
 mod report;
+mod session;
+mod tools;
+mod workspace;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -54,18 +60,92 @@ enum Commands {
         #[arg(short, long, default_value_t = 20)]
         limit: usize,
     },
+
+    /// Run A/B eval: Claude Code with vs without codemap tools (simulation)
+    Ab {
+        /// Path to dataset JSON file (or directory of datasets)
+        #[arg(short, long)]
+        dataset: PathBuf,
+
+        /// Path to a local checkout of the repository
+        #[arg(long)]
+        repo_dir: PathBuf,
+
+        /// Claude model to use
+        #[arg(long, default_value = "claude-sonnet-4-20250514")]
+        model: String,
+
+        /// Max conversation turns per session
+        #[arg(long, default_value_t = 15)]
+        max_turns: usize,
+
+        /// Max input tokens per session
+        #[arg(long, default_value_t = 50000)]
+        max_tokens: usize,
+
+        /// Run specific case IDs only (comma-separated)
+        #[arg(long)]
+        cases: Option<String>,
+
+        /// Run only control, treatment, or both
+        #[arg(long, value_enum, default_value_t = ab::Variant::Both)]
+        variant: ab::Variant,
+
+        /// Skip archiving results to history.db
+        #[arg(long)]
+        no_archive: bool,
+    },
+
+    /// Run end-to-end eval using real Claude Code CLI sessions
+    E2e {
+        /// Path to dataset JSON file (or directory of datasets)
+        #[arg(short, long)]
+        dataset: PathBuf,
+
+        /// Path to a local checkout of the repository
+        #[arg(long)]
+        repo_dir: PathBuf,
+
+        /// Claude model to use
+        #[arg(long, default_value = "claude-sonnet-4-20250514")]
+        model: String,
+
+        /// Max Claude Code turns per session
+        #[arg(long, default_value_t = 20)]
+        max_turns: usize,
+
+        /// Per-session wall clock timeout in seconds
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+
+        /// Run specific case IDs only (comma-separated)
+        #[arg(long)]
+        cases: Option<String>,
+
+        /// Run only control, treatment, or both
+        #[arg(long, value_enum, default_value_t = ab::Variant::Both)]
+        variant: ab::Variant,
+
+        /// Skip archiving results to history.db
+        #[arg(long)]
+        no_archive: bool,
+
+        /// Print full Claude Code output
+        #[arg(long)]
+        verbose: bool,
+    },
 }
 
 #[derive(serde::Deserialize)]
-struct EvalDataset {
-    repo: String,
+pub(crate) struct EvalDataset {
+    pub repo: String,
     #[serde(default = "default_language")]
-    language: String,
+    pub language: String,
     #[allow(dead_code)]
     #[serde(default)]
-    commit: String,
-    index_db: String,
-    cases: Vec<EvalCase>,
+    pub commit: String,
+    pub index_db: String,
+    pub cases: Vec<EvalCase>,
 }
 
 fn default_language() -> String {
@@ -73,16 +153,16 @@ fn default_language() -> String {
 }
 
 #[derive(serde::Deserialize)]
-struct EvalCase {
-    id: String,
-    query: String,
-    expected_files: Vec<ExpectedFile>,
+pub(crate) struct EvalCase {
+    pub id: String,
+    pub query: String,
+    pub expected_files: Vec<ExpectedFile>,
 }
 
 #[derive(serde::Deserialize)]
-struct ExpectedFile {
-    path: String,
-    relevance: u8,
+pub(crate) struct ExpectedFile {
+    pub path: String,
+    pub relevance: u8,
 }
 
 fn main() -> Result<()> {
@@ -96,6 +176,46 @@ fn main() -> Result<()> {
         } => run_eval(&dataset, &format, no_archive),
         Commands::Compare { dataset, against } => run_compare(&dataset, against.as_deref()),
         Commands::History { dataset, limit } => run_history(dataset.as_deref(), limit),
+        Commands::Ab {
+            dataset,
+            repo_dir,
+            model,
+            max_turns,
+            max_tokens,
+            cases,
+            variant,
+            no_archive,
+        } => ab::run_ab_eval(
+            &dataset,
+            &repo_dir,
+            &model,
+            max_turns,
+            max_tokens,
+            cases.as_deref(),
+            variant,
+            no_archive,
+        ),
+        Commands::E2e {
+            dataset,
+            repo_dir,
+            model,
+            max_turns,
+            timeout,
+            cases,
+            variant,
+            no_archive,
+            verbose,
+        } => e2e::run_e2e_eval(
+            &dataset,
+            &repo_dir,
+            &model,
+            max_turns,
+            timeout,
+            cases.as_deref(),
+            variant,
+            no_archive,
+            verbose,
+        ),
     }
 }
 
@@ -267,7 +387,7 @@ fn run_history(dataset: Option<&str>, limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn load_datasets(path: &Path) -> Result<Vec<EvalDataset>> {
+pub(crate) fn load_datasets(path: &Path) -> Result<Vec<EvalDataset>> {
     if path.is_dir() {
         let mut datasets = Vec::new();
         let mut entries: Vec<_> = std::fs::read_dir(path)?
@@ -290,7 +410,7 @@ fn load_datasets(path: &Path) -> Result<Vec<EvalDataset>> {
     }
 }
 
-fn find_eval_dir() -> Result<PathBuf> {
+pub(crate) fn find_eval_dir() -> Result<PathBuf> {
     let mut dir = std::env::current_dir()?;
     loop {
         let eval_dir = dir.join("eval");
