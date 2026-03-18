@@ -78,6 +78,13 @@ e2e-treatment: e2e ## Run e2e eval — treatment variant only
 e2e-enriched: VARIANT = enriched
 e2e-enriched: e2e ## Run e2e eval — enriched variant only
 
+.PHONY: smoke
+smoke: MODEL = haiku
+smoke: MAX_TURNS = 3
+smoke: DATASET = $(DATASETS)/hono.json
+smoke: CASES = hono-001
+smoke: e2e ## Quick smoke test — 1 case, all variants, Haiku, 3 turns
+
 .PHONY: e2e-cheap
 e2e-cheap: MODEL = haiku
 e2e-cheap: e2e ## Run e2e eval with Haiku (cheaper, faster iteration)

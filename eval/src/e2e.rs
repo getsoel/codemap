@@ -4,13 +4,14 @@
 /// and measures whether Claude Code completes file discovery tasks better when codemap
 /// is available as a tool via `--append-system-prompt`.
 use crate::history;
+use crate::metrics::ndcg_at_k;
 use crate::session::{self, SessionMetrics};
 use crate::workspace;
 use anyhow::{Context, Result, ensure};
 use clap::ValueEnum;
 use codemap::db;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Command;
@@ -36,7 +37,7 @@ After exploring, respond with ONLY a JSON object in this exact format:
 
 struct TaskResult {
     case_id: String,
-    expected: HashSet<String>,
+    expected: HashMap<String, u8>,
     control: Option<SessionMetrics>,
     treatment: Option<SessionMetrics>,
     enriched: Option<SessionMetrics>,
@@ -70,6 +71,11 @@ struct E2eAggregate {
     avg_treatment_precision: f64,
     avg_enriched_precision: f64,
 
+    // NDCG (graded relevance)
+    avg_control_ndcg: f64,
+    avg_treatment_ndcg: f64,
+    avg_enriched_ndcg: f64,
+
     // Efficiency
     avg_control_tool_calls: f64,
     avg_treatment_tool_calls: f64,
@@ -86,6 +92,9 @@ struct E2eAggregate {
     avg_treatment_wall_time_ms: f64,
     avg_enriched_wall_time_ms: f64,
     time_reduction_pct: f64,
+    enriched_tool_call_reduction_pct: f64,
+    enriched_token_reduction_pct: f64,
+    enriched_time_reduction_pct: f64,
 
     // Codemap usage
     avg_control_codemap_calls: f64,
@@ -102,6 +111,10 @@ struct E2eAggregate {
     control_wins: usize,
     enriched_wins: usize,
     ties: usize,
+
+    // Pairwise stats for sign test
+    pairwise_treat_ctrl: [usize; 3],  // [treat_wins, ctrl_wins, ties]
+    pairwise_enrich_ctrl: [usize; 3], // [enrich_wins, ctrl_wins, ties]
 }
 
 /// Run the full end-to-end eval pipeline.
@@ -210,8 +223,11 @@ pub fn run_e2e_eval(
                 continue;
             }
 
-            let expected: HashSet<String> =
-                case.expected_files.iter().map(|f| f.path.clone()).collect();
+            let expected: HashMap<String, u8> = case
+                .expected_files
+                .iter()
+                .map(|f| (f.path.clone(), f.relevance))
+                .collect();
             let task_prompt = TASK_PROMPT_TEMPLATE.replace("{query}", &case.query);
 
             eprintln!("\n  {} - {}", case.id, case.query);
@@ -371,11 +387,12 @@ fn run_session_variant(
     max_turns: usize,
     timeout_secs: u64,
     known_files: &HashSet<String>,
-    expected_files: &HashSet<String>,
+    expected_files: &HashMap<String, u8>,
     case_id: &str,
     verbose: bool,
 ) -> Result<SessionMetrics> {
     let label = kind.label();
+    let expected_set: HashSet<String> = expected_files.keys().cloned().collect();
 
     let raw = session::run_claude_session(ws_path, task_prompt, model, max_turns, timeout_secs)?;
 
@@ -395,7 +412,7 @@ fn run_session_variant(
     let metrics = session::parse_stream_output(
         &raw,
         known_files,
-        expected_files,
+        &expected_set,
         label,
         case_id,
         &workspace_prefix,
@@ -404,6 +421,9 @@ fn run_session_variant(
     // Warn if treatment/enriched session didn't receive hook injection
     if kind != workspace::WorkspaceKind::Control && !metrics.hook_injected {
         eprintln!("    WARNING: {label} session did not receive codemap hook injection");
+    }
+    if metrics.files_identified.is_empty() {
+        eprintln!("    WARNING: {label} produced no structured file list (scoring as 0 recall)");
     }
 
     print_session_summary(label, &metrics, expected_files);
@@ -464,17 +484,20 @@ fn detect_enrichment_model() -> Option<String> {
     }
 }
 
-fn print_session_summary(label: &str, metrics: &SessionMetrics, expected: &HashSet<String>) {
+fn print_session_summary(label: &str, metrics: &SessionMetrics, expected: &HashMap<String, u8>) {
+    let expected_set: HashSet<String> = expected.keys().cloned().collect();
     let file_set = best_file_set(metrics);
-    let r = recall(&file_set, expected);
-    let p = precision_from_identified(&metrics.files_identified, expected);
+    let r = recall(&file_set, &expected_set);
+    let p = precision_from_identified(&metrics.files_identified, &expected_set);
+    let ndcg = ndcg_at_k(&metrics.files_identified, expected, 10);
     eprintln!(
-        "    {label:10} {} tools, {} files read, recall={:.0}% precision={:.0}%, \
+        "    {label:10} {} tools, {} files read, recall={:.0}% precision={:.0}% ndcg={:.2}, \
          {:.1}k in + {:.1}k out tokens, {:.1}s",
         metrics.tool_calls,
         metrics.files_read.len(),
         r * 100.0,
         p * 100.0,
+        ndcg,
         metrics.input_tokens as f64 / 1000.0,
         metrics.output_tokens as f64 / 1000.0,
         metrics.wall_clock_ms as f64 / 1000.0,
@@ -488,11 +511,7 @@ fn print_session_summary(label: &str, metrics: &SessionMetrics, expected: &HashS
 
 /// Get the best available file set: prefer structured output, fall back to mentions.
 fn best_file_set(m: &SessionMetrics) -> HashSet<String> {
-    if !m.files_identified.is_empty() {
-        m.files_identified.iter().cloned().collect()
-    } else {
-        m.files_mentioned.clone()
-    }
+    m.files_identified.iter().cloned().collect()
 }
 
 fn recall(discovered: &HashSet<String>, expected: &HashSet<String>) -> f64 {
@@ -514,39 +533,43 @@ fn precision_from_identified(identified: &[String], expected: &HashSet<String>) 
     hits as f64 / identified.len() as f64
 }
 
+fn f1_score(m: &SessionMetrics, expected_set: &HashSet<String>) -> f64 {
+    let file_set = best_file_set(m);
+    let r = recall(&file_set, expected_set);
+    let p = precision_from_identified(&m.files_identified, expected_set);
+    if r + p > 0.0 {
+        2.0 * r * p / (r + p)
+    } else {
+        0.0
+    }
+}
+
 /// Determine the winner among available variants.
 ///
-/// Best recall wins; on tie (within 1%), fewest tool calls wins.
+/// Best F1 wins; on tie (within 1%), fewest tool calls wins.
 fn multi_case_winner(
     control: Option<&SessionMetrics>,
     treatment: Option<&SessionMetrics>,
     enriched: Option<&SessionMetrics>,
-    expected: &HashSet<String>,
+    expected: &HashMap<String, u8>,
 ) -> &'static str {
+    let expected_set: HashSet<String> = expected.keys().cloned().collect();
     let mut candidates: Vec<(&str, f64, usize)> = Vec::new();
-    if let Some(c) = control {
-        candidates.push(("control", recall(&best_file_set(c), expected), c.tool_calls));
-    }
-    if let Some(t) = treatment {
-        candidates.push((
-            "treatment",
-            recall(&best_file_set(t), expected),
-            t.tool_calls,
-        ));
-    }
-    if let Some(e) = enriched {
-        candidates.push((
-            "enriched",
-            recall(&best_file_set(e), expected),
-            e.tool_calls,
-        ));
+    for (name, metrics) in [
+        ("control", control),
+        ("treatment", treatment),
+        ("enriched", enriched),
+    ] {
+        if let Some(m) = metrics {
+            candidates.push((name, f1_score(m, &expected_set), m.tool_calls));
+        }
     }
 
     if candidates.len() < 2 {
         return candidates.first().map_or("n/a", |(name, _, _)| *name);
     }
 
-    // Sort by recall desc, then tool_calls asc
+    // Sort by F1 desc, then tool_calls asc
     candidates.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -556,23 +579,66 @@ fn multi_case_winner(
     let best = &candidates[0];
     let second = &candidates[1];
 
-    // Clear recall advantage → winner; otherwise tie (tool_calls already sorted)
-    if best.1 > second.1 + 0.01 {
-        best.0
-    } else if best.2 < second.2 {
-        // Recalls within 1%, fewer tool calls wins
+    // Clear F1 advantage, or F1 within 1% but fewer tool calls
+    if best.1 > second.1 + 0.01 || best.2 < second.2 {
         best.0
     } else {
         "tie"
     }
 }
 
-fn reduction_pct(control: f64, treatment: f64) -> f64 {
-    if control > 0.0 {
-        (control - treatment) / control * 100.0
+/// Compare two variants pairwise using F1. Returns Ordering of `a` vs `b`.
+fn pairwise_cmp(
+    a: &SessionMetrics,
+    b: &SessionMetrics,
+    expected: &HashMap<String, u8>,
+) -> std::cmp::Ordering {
+    let expected_set: HashSet<String> = expected.keys().cloned().collect();
+    let a_f1 = f1_score(a, &expected_set);
+    let b_f1 = f1_score(b, &expected_set);
+    if (a_f1 - b_f1).abs() > 0.01 {
+        a_f1.partial_cmp(&b_f1).unwrap_or(std::cmp::Ordering::Equal)
+    } else if a.tool_calls != b.tool_calls {
+        b.tool_calls.cmp(&a.tool_calls) // fewer is better
+    } else {
+        std::cmp::Ordering::Equal
+    }
+}
+
+/// Two-sided sign test p-value. Tests null hypothesis P(win) = P(loss) = 0.5.
+fn sign_test_p_value(wins: usize, losses: usize) -> f64 {
+    let n = wins + losses;
+    if n == 0 {
+        return 1.0;
+    }
+    let k = wins.min(losses);
+    let mut cumulative = 0.0;
+    for i in 0..=k {
+        cumulative += binom_pmf(n, i);
+    }
+    (2.0 * cumulative).min(1.0)
+}
+
+fn binom_pmf(n: usize, k: usize) -> f64 {
+    let mut log_binom = 0.0_f64;
+    for i in 0..k {
+        log_binom += ((n - i) as f64).ln() - ((i + 1) as f64).ln();
+    }
+    (log_binom + (n as f64) * 0.5_f64.ln()).exp()
+}
+
+/// Percentage change from baseline to current. Positive means increase.
+fn pct_change(baseline: f64, current: f64) -> f64 {
+    if baseline > 0.0 {
+        (current - baseline) / baseline * 100.0
     } else {
         0.0
     }
+}
+
+/// Percentage reduction (positive = current is smaller). Inverse of `pct_change`.
+fn reduction_pct(control: f64, treatment: f64) -> f64 {
+    -pct_change(control, treatment)
 }
 
 fn truncate(s: &str, max: usize) -> &str {
@@ -594,17 +660,20 @@ impl E2eAggregate {
     fn accumulate(
         &mut self,
         m: &SessionMetrics,
-        expected: &HashSet<String>,
+        expected: &HashMap<String, u8>,
         kind: workspace::WorkspaceKind,
     ) {
+        let expected_set: HashSet<String> = expected.keys().cloned().collect();
         let files = best_file_set(m);
-        let r = recall(&files, expected);
-        let p = precision_from_identified(&m.files_identified, expected);
+        let r = recall(&files, &expected_set);
+        let p = precision_from_identified(&m.files_identified, &expected_set);
+        let ndcg = ndcg_at_k(&m.files_identified, expected, 10);
 
         match kind {
             workspace::WorkspaceKind::Control => {
                 self.avg_control_recall += r;
                 self.avg_control_precision += p;
+                self.avg_control_ndcg += ndcg;
                 self.avg_control_tool_calls += m.tool_calls as f64;
                 self.avg_control_input_tokens += m.input_tokens as f64;
                 self.avg_control_output_tokens += m.output_tokens as f64;
@@ -614,6 +683,7 @@ impl E2eAggregate {
             workspace::WorkspaceKind::Treatment => {
                 self.avg_treatment_recall += r;
                 self.avg_treatment_precision += p;
+                self.avg_treatment_ndcg += ndcg;
                 self.avg_treatment_tool_calls += m.tool_calls as f64;
                 self.avg_treatment_input_tokens += m.input_tokens as f64;
                 self.avg_treatment_output_tokens += m.output_tokens as f64;
@@ -623,6 +693,7 @@ impl E2eAggregate {
             workspace::WorkspaceKind::Enriched => {
                 self.avg_enriched_recall += r;
                 self.avg_enriched_precision += p;
+                self.avg_enriched_ndcg += ndcg;
                 self.avg_enriched_tool_calls += m.tool_calls as f64;
                 self.avg_enriched_input_tokens += m.input_tokens as f64;
                 self.avg_enriched_output_tokens += m.output_tokens as f64;
@@ -647,6 +718,9 @@ impl E2eAggregate {
         self.avg_control_precision /= nf;
         self.avg_treatment_precision /= nf;
         self.avg_enriched_precision /= nf;
+        self.avg_control_ndcg /= nf;
+        self.avg_treatment_ndcg /= nf;
+        self.avg_enriched_ndcg /= nf;
         self.avg_control_tool_calls /= nf;
         self.avg_treatment_tool_calls /= nf;
         self.avg_enriched_tool_calls /= nf;
@@ -673,15 +747,26 @@ impl E2eAggregate {
             self.avg_enriched_first_relevant /= e_first_count as f64;
         }
 
-        self.tool_call_reduction_pct =
-            reduction_pct(self.avg_control_tool_calls, self.avg_treatment_tool_calls);
         let control_total_tokens = self.avg_control_input_tokens + self.avg_control_output_tokens;
         let treatment_total_tokens =
             self.avg_treatment_input_tokens + self.avg_treatment_output_tokens;
+        let enriched_total_tokens =
+            self.avg_enriched_input_tokens + self.avg_enriched_output_tokens;
+
+        self.tool_call_reduction_pct =
+            reduction_pct(self.avg_control_tool_calls, self.avg_treatment_tool_calls);
         self.token_reduction_pct = reduction_pct(control_total_tokens, treatment_total_tokens);
         self.time_reduction_pct = reduction_pct(
             self.avg_control_wall_time_ms,
             self.avg_treatment_wall_time_ms,
+        );
+        self.enriched_tool_call_reduction_pct =
+            reduction_pct(self.avg_control_tool_calls, self.avg_enriched_tool_calls);
+        self.enriched_token_reduction_pct =
+            reduction_pct(control_total_tokens, enriched_total_tokens);
+        self.enriched_time_reduction_pct = reduction_pct(
+            self.avg_control_wall_time_ms,
+            self.avg_enriched_wall_time_ms,
         );
     }
 }
@@ -741,6 +826,22 @@ fn compute_aggregate(results: &[TaskResult]) -> E2eAggregate {
             "control" => agg.control_wins += 1,
             "enriched" => agg.enriched_wins += 1,
             _ => agg.ties += 1,
+        }
+
+        // Pairwise comparisons for sign test
+        if let (Some(c), Some(t)) = (&r.control, &r.treatment) {
+            match pairwise_cmp(t, c, &r.expected) {
+                std::cmp::Ordering::Greater => agg.pairwise_treat_ctrl[0] += 1,
+                std::cmp::Ordering::Less => agg.pairwise_treat_ctrl[1] += 1,
+                std::cmp::Ordering::Equal => agg.pairwise_treat_ctrl[2] += 1,
+            }
+        }
+        if let (Some(c), Some(e)) = (&r.control, &r.enriched) {
+            match pairwise_cmp(e, c, &r.expected) {
+                std::cmp::Ordering::Greater => agg.pairwise_enrich_ctrl[0] += 1,
+                std::cmp::Ordering::Less => agg.pairwise_enrich_ctrl[1] += 1,
+                std::cmp::Ordering::Equal => agg.pairwise_enrich_ctrl[2] += 1,
+            }
         }
     }
 
@@ -813,10 +914,10 @@ fn print_e2e_report(
         println!();
         if show_enriched {
             println!(
-                "  {:20} {:>10} {:>10} {:>10} {:>10}",
-                "Metric", "Control", "Treatment", "Enriched", "Delta"
+                "  {:20} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                "Metric", "Control", "Treatment", "Enriched", "Δ Treat", "Δ Enrich"
             );
-            println!("  {}", "\u{2500}".repeat(62));
+            println!("  {}", "\u{2500}".repeat(72));
         } else {
             println!(
                 "  {:20} {:>10} {:>10} {:>10}",
@@ -847,15 +948,27 @@ fn print_e2e_report(
                 None
             },
         );
+        // NDCG@10
+        print_metric_row(
+            "NDCG@10",
+            agg.avg_control_ndcg,
+            agg.avg_treatment_ndcg,
+            if show_enriched {
+                Some(agg.avg_enriched_ndcg)
+            } else {
+                None
+            },
+        );
         // Tool calls
         if show_enriched {
             println!(
-                "  {:20} {:>10.1} {:>10.1} {:>10.1} {:>+9.0}%",
+                "  {:20} {:>10.1} {:>10.1} {:>10.1} {:>+9.0}% {:>+9.0}%",
                 "Tool calls",
                 agg.avg_control_tool_calls,
                 agg.avg_treatment_tool_calls,
                 agg.avg_enriched_tool_calls,
                 -agg.tool_call_reduction_pct,
+                -agg.enriched_tool_call_reduction_pct,
             );
         } else {
             println!(
@@ -869,12 +982,13 @@ fn print_e2e_report(
         // Tokens (input)
         if show_enriched {
             println!(
-                "  {:20} {:>9.1}k {:>9.1}k {:>9.1}k {:>+9.0}%",
+                "  {:20} {:>9.1}k {:>9.1}k {:>9.1}k {:>+9.0}% {:>+9.0}%",
                 "Input tokens",
                 agg.avg_control_input_tokens / 1000.0,
                 agg.avg_treatment_input_tokens / 1000.0,
                 agg.avg_enriched_input_tokens / 1000.0,
                 -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
+                -reduction_pct(agg.avg_control_input_tokens, agg.avg_enriched_input_tokens),
             );
         } else {
             println!(
@@ -888,7 +1002,7 @@ fn print_e2e_report(
         // Tokens (output)
         if show_enriched {
             println!(
-                "  {:20} {:>9.1}k {:>9.1}k {:>9.1}k {:>+9.0}%",
+                "  {:20} {:>9.1}k {:>9.1}k {:>9.1}k {:>+9.0}% {:>+9.0}%",
                 "Output tokens",
                 agg.avg_control_output_tokens / 1000.0,
                 agg.avg_treatment_output_tokens / 1000.0,
@@ -896,6 +1010,10 @@ fn print_e2e_report(
                 -reduction_pct(
                     agg.avg_control_output_tokens,
                     agg.avg_treatment_output_tokens
+                ),
+                -reduction_pct(
+                    agg.avg_control_output_tokens,
+                    agg.avg_enriched_output_tokens
                 ),
             );
         } else {
@@ -913,12 +1031,13 @@ fn print_e2e_report(
         // Wall time
         if show_enriched {
             println!(
-                "  {:20} {:>9.1}s {:>9.1}s {:>9.1}s {:>+9.0}%",
+                "  {:20} {:>9.1}s {:>9.1}s {:>9.1}s {:>+9.0}% {:>+9.0}%",
                 "Wall time",
                 agg.avg_control_wall_time_ms / 1000.0,
                 agg.avg_treatment_wall_time_ms / 1000.0,
                 agg.avg_enriched_wall_time_ms / 1000.0,
                 -agg.time_reduction_pct,
+                -agg.enriched_time_reduction_pct,
             );
         } else {
             println!(
@@ -932,34 +1051,55 @@ fn print_e2e_report(
         // Codemap calls
         if show_enriched {
             println!(
-                "  {:20} {:>10.1} {:>10.1} {:>10.1} {:>10}",
+                "  {:20} {:>10.1} {:>10.1} {:>10.1}",
                 "Codemap calls",
                 agg.avg_control_codemap_calls,
                 agg.avg_treatment_codemap_calls,
                 agg.avg_enriched_codemap_calls,
-                "n/a",
             );
         } else {
             println!(
-                "  {:20} {:>10.1} {:>10.1} {:>10}",
-                "Codemap calls",
-                agg.avg_control_codemap_calls,
-                agg.avg_treatment_codemap_calls,
-                "n/a",
+                "  {:20} {:>10.1} {:>10.1}",
+                "Codemap calls", agg.avg_control_codemap_calls, agg.avg_treatment_codemap_calls,
             );
         }
 
         println!();
         if show_enriched {
             println!(
-                "  Wins: Treatment {} / Enriched {} / Control {} / Tie {}",
+                "  Wins (F1): Treatment {} / Enriched {} / Control {} / Tie {}",
                 agg.treatment_wins, agg.enriched_wins, agg.control_wins, agg.ties,
             );
         } else {
             println!(
-                "  Win/Loss/Tie: Treatment {} / Control {} / Tie {}",
+                "  Wins (F1): Treatment {} / Control {} / Tie {}",
                 agg.treatment_wins, agg.control_wins, agg.ties,
             );
+        }
+        // Sign test p-values
+        {
+            let [tw, cw, _] = agg.pairwise_treat_ctrl;
+            if tw + cw > 0 {
+                let p = sign_test_p_value(tw, cw);
+                let sig = if p < 0.05 {
+                    "significant"
+                } else {
+                    "not significant"
+                };
+                println!("  Treatment vs Control: {tw}-{cw} (p={p:.3}, {sig})");
+            }
+        }
+        if show_enriched {
+            let [ew, cw, _] = agg.pairwise_enrich_ctrl;
+            if ew + cw > 0 {
+                let p = sign_test_p_value(ew, cw);
+                let sig = if p < 0.05 {
+                    "significant"
+                } else {
+                    "not significant"
+                };
+                println!("  Enriched vs Control:  {ew}-{cw} (p={p:.3}, {sig})");
+            }
         }
     } else {
         // Single variant mode
@@ -1085,136 +1225,159 @@ fn write_dataset_section(
     writeln!(md).unwrap();
 
     if has_comparison {
-        if show_enriched {
-            writeln!(md, "| Metric | Control | Treatment | Enriched | Delta |").unwrap();
-            writeln!(md, "|--------|---------|-----------|----------|-------|").unwrap();
-            writeln!(
-                md,
-                "| Recall | {:.2} | {:.2} | {:.2} | {:+.0}% |",
-                agg.avg_control_recall,
-                agg.avg_treatment_recall,
-                agg.avg_enriched_recall,
-                -reduction_pct(agg.avg_control_recall, agg.avg_treatment_recall),
-            )
-            .unwrap();
-            writeln!(
-                md,
-                "| Precision | {:.2} | {:.2} | {:.2} | {:+.0}% |",
-                agg.avg_control_precision,
-                agg.avg_treatment_precision,
-                agg.avg_enriched_precision,
-                -reduction_pct(agg.avg_control_precision, agg.avg_treatment_precision),
-            )
-            .unwrap();
-            writeln!(
-                md,
-                "| Tool calls | {:.1} | {:.1} | {:.1} | {:+.0}% |",
-                agg.avg_control_tool_calls,
-                agg.avg_treatment_tool_calls,
-                agg.avg_enriched_tool_calls,
-                -agg.tool_call_reduction_pct,
-            )
-            .unwrap();
-            writeln!(
-                md,
-                "| Input tokens | {:.1}k | {:.1}k | {:.1}k | {:+.0}% |",
-                agg.avg_control_input_tokens / 1000.0,
-                agg.avg_treatment_input_tokens / 1000.0,
-                agg.avg_enriched_input_tokens / 1000.0,
-                -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
-            )
-            .unwrap();
-            writeln!(
-                md,
-                "| Output tokens | {:.1}k | {:.1}k | {:.1}k | {:+.0}% |",
-                agg.avg_control_output_tokens / 1000.0,
-                agg.avg_treatment_output_tokens / 1000.0,
-                agg.avg_enriched_output_tokens / 1000.0,
-                -reduction_pct(
-                    agg.avg_control_output_tokens,
-                    agg.avg_treatment_output_tokens
+        // Helper to format a metric row for markdown
+        let md_row =
+            |md: &mut String, name: &str, ctrl: f64, treat: f64, enrich: Option<f64>, fmt: &str| {
+                let treat_delta = pct_change(ctrl, treat);
+                match (enrich, fmt) {
+                (Some(e), "pct") => writeln!(
+                    md,
+                    "| {name} | {ctrl:.2} | {treat:.2} | {e:.2} | {treat_delta:+.0}% | {:+.0}% |",
+                    pct_change(ctrl, e)
                 ),
+                (None, "pct") => {
+                    writeln!(md, "| {name} | {ctrl:.2} | {treat:.2} | {treat_delta:+.0}% |")
+                }
+                (Some(e), _) => writeln!(
+                    md,
+                    "| {name} | {ctrl:.1} | {treat:.1} | {e:.1} | {treat_delta:+.0}% | {:+.0}% |",
+                    pct_change(ctrl, e)
+                ),
+                (None, _) => {
+                    writeln!(md, "| {name} | {ctrl:.1} | {treat:.1} | {treat_delta:+.0}% |")
+                }
+            }
+            .unwrap();
+            };
+
+        let e = |v: f64| if show_enriched { Some(v) } else { None };
+
+        if show_enriched {
+            writeln!(
+                md,
+                "| Metric | Control | Treatment | Enriched | Δ Treat | Δ Enrich |"
             )
             .unwrap();
             writeln!(
                 md,
-                "| Wall time | {:.1}s | {:.1}s | {:.1}s | {:+.0}% |",
-                agg.avg_control_wall_time_ms / 1000.0,
-                agg.avg_treatment_wall_time_ms / 1000.0,
-                agg.avg_enriched_wall_time_ms / 1000.0,
-                -agg.time_reduction_pct,
+                "|--------|---------|-----------|----------|---------|----------|"
             )
             .unwrap();
         } else {
             writeln!(md, "| Metric | Control | Treatment | Delta |").unwrap();
             writeln!(md, "|--------|---------|-----------|-------|").unwrap();
+        }
+
+        md_row(
+            md,
+            "Recall",
+            agg.avg_control_recall,
+            agg.avg_treatment_recall,
+            e(agg.avg_enriched_recall),
+            "pct",
+        );
+        md_row(
+            md,
+            "Precision",
+            agg.avg_control_precision,
+            agg.avg_treatment_precision,
+            e(agg.avg_enriched_precision),
+            "pct",
+        );
+        md_row(
+            md,
+            "NDCG@10",
+            agg.avg_control_ndcg,
+            agg.avg_treatment_ndcg,
+            e(agg.avg_enriched_ndcg),
+            "pct",
+        );
+        md_row(
+            md,
+            "Tool calls",
+            agg.avg_control_tool_calls,
+            agg.avg_treatment_tool_calls,
+            e(agg.avg_enriched_tool_calls),
+            "num",
+        );
+
+        // Token rows with "k" suffix need custom formatting
+        let ctrl_in = agg.avg_control_input_tokens / 1000.0;
+        let treat_in = agg.avg_treatment_input_tokens / 1000.0;
+        let enrich_in = agg.avg_enriched_input_tokens / 1000.0;
+        let ctrl_out = agg.avg_control_output_tokens / 1000.0;
+        let treat_out = agg.avg_treatment_output_tokens / 1000.0;
+        let enrich_out = agg.avg_enriched_output_tokens / 1000.0;
+        let ctrl_wall = agg.avg_control_wall_time_ms / 1000.0;
+        let treat_wall = agg.avg_treatment_wall_time_ms / 1000.0;
+        let enrich_wall = agg.avg_enriched_wall_time_ms / 1000.0;
+
+        if show_enriched {
+            writeln!(md, "| Input tokens | {ctrl_in:.1}k | {treat_in:.1}k | {enrich_in:.1}k | {:+.0}% | {:+.0}% |", pct_change(ctrl_in, treat_in), pct_change(ctrl_in, enrich_in)).unwrap();
+            writeln!(md, "| Output tokens | {ctrl_out:.1}k | {treat_out:.1}k | {enrich_out:.1}k | {:+.0}% | {:+.0}% |", pct_change(ctrl_out, treat_out), pct_change(ctrl_out, enrich_out)).unwrap();
+            writeln!(md, "| Wall time | {ctrl_wall:.1}s | {treat_wall:.1}s | {enrich_wall:.1}s | {:+.0}% | {:+.0}% |", pct_change(ctrl_wall, treat_wall), pct_change(ctrl_wall, enrich_wall)).unwrap();
+        } else {
             writeln!(
                 md,
-                "| Recall | {:.2} | {:.2} | {:+.0}% |",
-                agg.avg_control_recall,
-                agg.avg_treatment_recall,
-                -reduction_pct(agg.avg_control_recall, agg.avg_treatment_recall),
+                "| Input tokens | {ctrl_in:.1}k | {treat_in:.1}k | {:+.0}% |",
+                pct_change(ctrl_in, treat_in)
             )
             .unwrap();
             writeln!(
                 md,
-                "| Precision | {:.2} | {:.2} | {:+.0}% |",
-                agg.avg_control_precision,
-                agg.avg_treatment_precision,
-                -reduction_pct(agg.avg_control_precision, agg.avg_treatment_precision),
+                "| Output tokens | {ctrl_out:.1}k | {treat_out:.1}k | {:+.0}% |",
+                pct_change(ctrl_out, treat_out)
             )
             .unwrap();
             writeln!(
                 md,
-                "| Tool calls | {:.1} | {:.1} | {:+.0}% |",
-                agg.avg_control_tool_calls,
-                agg.avg_treatment_tool_calls,
-                -agg.tool_call_reduction_pct,
-            )
-            .unwrap();
-            writeln!(
-                md,
-                "| Input tokens | {:.1}k | {:.1}k | {:+.0}% |",
-                agg.avg_control_input_tokens / 1000.0,
-                agg.avg_treatment_input_tokens / 1000.0,
-                -reduction_pct(agg.avg_control_input_tokens, agg.avg_treatment_input_tokens),
-            )
-            .unwrap();
-            writeln!(
-                md,
-                "| Output tokens | {:.1}k | {:.1}k | {:+.0}% |",
-                agg.avg_control_output_tokens / 1000.0,
-                agg.avg_treatment_output_tokens / 1000.0,
-                -reduction_pct(
-                    agg.avg_control_output_tokens,
-                    agg.avg_treatment_output_tokens
-                ),
-            )
-            .unwrap();
-            writeln!(
-                md,
-                "| Wall time | {:.1}s | {:.1}s | {:+.0}% |",
-                agg.avg_control_wall_time_ms / 1000.0,
-                agg.avg_treatment_wall_time_ms / 1000.0,
-                -agg.time_reduction_pct,
+                "| Wall time | {ctrl_wall:.1}s | {treat_wall:.1}s | {:+.0}% |",
+                pct_change(ctrl_wall, treat_wall)
             )
             .unwrap();
         }
+
         writeln!(md).unwrap();
         if show_enriched {
             writeln!(
                 md,
-                "**Wins:** Treatment {} / Enriched {} / Control {} / Tie {}",
+                "**Wins (F1):** Treatment {} / Enriched {} / Control {} / Tie {}",
                 agg.treatment_wins, agg.enriched_wins, agg.control_wins, agg.ties,
             )
             .unwrap();
         } else {
             writeln!(
                 md,
-                "**Win/Loss/Tie:** Treatment {} / Control {} / Tie {}",
+                "**Wins (F1):** Treatment {} / Control {} / Tie {}",
                 agg.treatment_wins, agg.control_wins, agg.ties,
             )
             .unwrap();
+        }
+
+        // Sign test p-values
+        {
+            let [tw, cw, _] = agg.pairwise_treat_ctrl;
+            if tw + cw > 0 {
+                let p = sign_test_p_value(tw, cw);
+                let sig = if p < 0.05 {
+                    "significant"
+                } else {
+                    "not significant"
+                };
+                writeln!(md, "\nTreatment vs Control: {tw}-{cw} (p={p:.3}, {sig})").unwrap();
+            }
+        }
+        if show_enriched {
+            let [ew, cw, _] = agg.pairwise_enrich_ctrl;
+            if ew + cw > 0 {
+                let p = sign_test_p_value(ew, cw);
+                let sig = if p < 0.05 {
+                    "significant"
+                } else {
+                    "not significant"
+                };
+                writeln!(md, "\nEnriched vs Control: {ew}-{cw} (p={p:.3}, {sig})").unwrap();
+            }
         }
         writeln!(md).unwrap();
 
@@ -1224,27 +1387,28 @@ fn write_dataset_section(
         if show_enriched {
             writeln!(
                 md,
-                "| Case | Ctrl tools | Treat tools | Enrich tools | Ctrl recall | Treat recall | Enrich recall | Winner |"
+                "| Case | Ctrl tools | Treat tools | Enrich tools | Ctrl F1 | Treat F1 | Enrich F1 | Winner |"
             )
             .unwrap();
             writeln!(
                 md,
-                "|------|-----------|------------|-------------|------------|-------------|--------------|--------|"
+                "|------|-----------|------------|-------------|---------|----------|-----------|--------|"
             )
             .unwrap();
         } else {
             writeln!(
                 md,
-                "| Case | Control tools | Treatment tools | Control recall | Treatment recall | Winner |"
+                "| Case | Control tools | Treatment tools | Control F1 | Treatment F1 | Winner |"
             )
             .unwrap();
             writeln!(
                 md,
-                "|------|--------------|----------------|---------------|-----------------|--------|"
+                "|------|--------------|----------------|------------|--------------|--------|"
             )
             .unwrap();
         }
         for r in results {
+            let expected_set: HashSet<String> = r.expected.keys().cloned().collect();
             let winner = multi_case_winner(
                 r.control.as_ref(),
                 r.treatment.as_ref(),
@@ -1264,32 +1428,32 @@ fn write_dataset_section(
                     .enriched
                     .as_ref()
                     .map_or("-".to_string(), |m| m.tool_calls.to_string());
-                let c_recall = r.control.as_ref().map_or("-".to_string(), |m| {
-                    format!("{:.0}%", recall(&best_file_set(m), &r.expected) * 100.0)
+                let c_f1 = r.control.as_ref().map_or("-".to_string(), |m| {
+                    format!("{:.0}%", f1_score(m, &expected_set) * 100.0)
                 });
-                let t_recall = r.treatment.as_ref().map_or("-".to_string(), |m| {
-                    format!("{:.0}%", recall(&best_file_set(m), &r.expected) * 100.0)
+                let t_f1 = r.treatment.as_ref().map_or("-".to_string(), |m| {
+                    format!("{:.0}%", f1_score(m, &expected_set) * 100.0)
                 });
-                let e_recall = r.enriched.as_ref().map_or("-".to_string(), |m| {
-                    format!("{:.0}%", recall(&best_file_set(m), &r.expected) * 100.0)
+                let e_f1 = r.enriched.as_ref().map_or("-".to_string(), |m| {
+                    format!("{:.0}%", f1_score(m, &expected_set) * 100.0)
                 });
                 writeln!(
                     md,
-                    "| {} | {c_tools} | {t_tools} | {e_tools} | {c_recall} | {t_recall} | {e_recall} | {winner} |",
+                    "| {} | {c_tools} | {t_tools} | {e_tools} | {c_f1} | {t_f1} | {e_f1} | {winner} |",
                     r.case_id,
                 )
                 .unwrap();
             } else if let (Some(c), Some(t)) = (&r.control, &r.treatment) {
-                let c_recall = recall(&best_file_set(c), &r.expected);
-                let t_recall = recall(&best_file_set(t), &r.expected);
+                let c_f1 = f1_score(c, &expected_set);
+                let t_f1 = f1_score(t, &expected_set);
                 writeln!(
                     md,
                     "| {} | {} | {} | {:.0}% | {:.0}% | {winner} |",
                     r.case_id,
                     c.tool_calls,
                     t.tool_calls,
-                    c_recall * 100.0,
-                    t_recall * 100.0,
+                    c_f1 * 100.0,
+                    t_f1 * 100.0,
                 )
                 .unwrap();
             }
@@ -1329,20 +1493,17 @@ fn write_dataset_section(
 }
 
 fn print_metric_row(name: &str, control: f64, treatment: f64, enriched: Option<f64>) {
-    let delta_pct = if control > 0.0 {
-        (treatment - control) / control * 100.0
-    } else {
-        0.0
-    };
+    let treat_delta = pct_change(control, treatment);
     if let Some(e) = enriched {
+        let enrich_delta = pct_change(control, e);
         println!(
-            "  {:20} {:>10.2} {:>10.2} {:>10.2} {:>+9.0}%",
-            name, control, treatment, e, delta_pct,
+            "  {:20} {:>10.2} {:>10.2} {:>10.2} {:>+9.0}% {:>+9.0}%",
+            name, control, treatment, e, treat_delta, enrich_delta,
         );
     } else {
         println!(
             "  {:20} {:>10.2} {:>10.2} {:>+9.0}%",
-            name, control, treatment, delta_pct,
+            name, control, treatment, treat_delta,
         );
     }
 }
