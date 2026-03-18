@@ -14,7 +14,7 @@ SCRIPTS   := scripts
 # E2E defaults (override on command line)
 MODEL     ?= opus
 MAX_TURNS ?= 15
-VARIANT   ?= both
+VARIANT   ?= all
 CASES     ?=
 TIMEOUT   ?= 300
 
@@ -74,6 +74,10 @@ e2e-control: e2e ## Run e2e eval — control variant only
 e2e-treatment: VARIANT = treatment
 e2e-treatment: e2e ## Run e2e eval — treatment variant only
 
+.PHONY: e2e-enriched
+e2e-enriched: VARIANT = enriched
+e2e-enriched: e2e ## Run e2e eval — enriched variant only
+
 .PHONY: e2e-cheap
 e2e-cheap: MODEL = haiku
 e2e-cheap: e2e ## Run e2e eval with Haiku (cheaper, faster iteration)
@@ -83,7 +87,6 @@ e2e-verbose: E2E_FLAGS = --verbose
 e2e-verbose: e2e ## Run e2e eval with verbose output
 
 .PHONY: report
-report: VARIANT = both
 report: DATASET =
 report: e2e ## Run full e2e benchmark on all datasets → RESULTS.md
 

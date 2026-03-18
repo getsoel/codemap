@@ -80,8 +80,8 @@ enum Commands {
         #[arg(long)]
         cases: Option<String>,
 
-        /// Run only control, treatment, or both
-        #[arg(long, value_enum, default_value_t = e2e::Variant::Both)]
+        /// Which variant(s) to run
+        #[arg(long, value_enum, default_value_t = e2e::Variant::All)]
         variant: e2e::Variant,
 
         /// Skip archiving results to history.db

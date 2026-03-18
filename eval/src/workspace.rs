@@ -7,6 +7,27 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
+/// What kind of workspace to create for an eval session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorkspaceKind {
+    /// No codemap — Claude Code alone.
+    Control,
+    /// codemap setup (heuristic metadata only).
+    Treatment,
+    /// codemap setup + `codemap enrich --api` (LLM-generated summaries).
+    Enriched,
+}
+
+impl WorkspaceKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Treatment => "treatment",
+            Self::Enriched => "enriched",
+        }
+    }
+}
+
 pub struct TempWorkspace {
     dir: TempDir,
 }
@@ -19,23 +40,24 @@ impl TempWorkspace {
 
 /// Create an isolated workspace for a single eval session.
 ///
-/// Copies the repo into a temp directory. When `is_treatment` is true, runs
-/// `codemap setup --no-post-hook` which indexes the codebase and writes the
-/// SessionStart hook to `.claude/settings.local.json`.
-/// Claude Code then picks up the hook naturally at session start.
+/// - `Control`: copies the repo only.
+/// - `Treatment`: copies the repo, runs `codemap setup --no-post-hook`.
+/// - `Enriched`: copies the repo, runs `codemap setup --no-post-hook`, then `codemap enrich --api`.
 pub fn create_workspace(
     repo_dir: &Path,
-    is_treatment: bool,
+    kind: WorkspaceKind,
     codemap_bin: &Path,
 ) -> Result<TempWorkspace> {
     let tmp = TempDir::new().context("failed to create temp directory")?;
 
     copy_repo(repo_dir, tmp.path())?;
 
-    if is_treatment {
-        // Run `codemap setup --no-post-hook` — indexes the repo and writes the
-        // SessionStart hook config. This is the same path real users take.
+    if matches!(kind, WorkspaceKind::Treatment | WorkspaceKind::Enriched) {
         run_codemap_setup(codemap_bin, tmp.path())?;
+    }
+
+    if kind == WorkspaceKind::Enriched {
+        run_codemap_enrich(codemap_bin, tmp.path())?;
     }
 
     Ok(TempWorkspace { dir: tmp })
@@ -85,6 +107,22 @@ fn run_codemap_setup(codemap_bin: &Path, working_dir: &Path) -> Result<()> {
         content.contains("SessionStart"),
         "codemap setup did not configure a SessionStart hook"
     );
+
+    Ok(())
+}
+
+/// Run `codemap enrich --api` to generate LLM summaries for indexed files.
+fn run_codemap_enrich(codemap_bin: &Path, working_dir: &Path) -> Result<()> {
+    let output = Command::new(codemap_bin)
+        .current_dir(working_dir)
+        .args(["enrich", "--api"])
+        .output()
+        .context("failed to run codemap enrich")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("codemap enrich --api failed: {stderr}");
+    }
 
     Ok(())
 }
