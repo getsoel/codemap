@@ -35,7 +35,7 @@ pub fn run_setup(root: &Path, no_post_hook: bool, global: bool, dry_run: bool) -
     let session_hook = serde_json::json!({
         "hooks": [{
             "type": "command",
-            "command": "codemap map",
+            "command": "codemap instructions",
             "timeout": 10
         }]
     });

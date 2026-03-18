@@ -1,3 +1,4 @@
+use petgraph::Direction;
 /// Dependency graph and PageRank with petgraph.
 use petgraph::algo::page_rank;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -42,15 +43,20 @@ impl DependencyGraph {
         self.graph.add_edge(from_idx, to_idx, kind);
     }
 
-    /// Standard PageRank — damping 0.85, 100 iterations.
-    /// Scores are N-relative (multiplied by node count) so the average is ~1.0.
+    /// PageRank (damping 0.85, 100 iterations) boosted by in-degree.
+    /// Scores are N-relative × log2(importers + 2) to counter rank-sink effects
+    /// where leaf nodes with few importers accumulate disproportionate rank.
     pub fn compute_ranks(&self) -> Vec<(String, f64)> {
         let scores = page_rank(&self.graph, 0.85_f64, 100);
         let n = self.graph.node_count() as f64;
         let mut ranked: Vec<(String, f64)> = self
             .graph
             .node_indices()
-            .map(|idx| (self.graph[idx].clone(), scores[idx.index()] * n))
+            .map(|idx| {
+                let pr = scores[idx.index()] * n;
+                let in_deg = self.graph.edges_directed(idx, Direction::Incoming).count() as f64;
+                (self.graph[idx].clone(), pr * (in_deg + 2.0_f64).log2())
+            })
             .collect();
         ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         ranked

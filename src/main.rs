@@ -97,6 +97,9 @@ enum Commands {
         dry_run: bool,
     },
 
+    /// Print codemap usage instructions (for session hooks)
+    Instructions,
+
     /// Show imports and importers of a file
     Deps {
         /// File path to inspect
@@ -284,6 +287,16 @@ fn main() -> anyhow::Result<()> {
                     if_available: args.if_available,
                 },
             )?;
+        }
+        Commands::Instructions => {
+            print!(
+                "## codemap — codebase intelligence\n\
+                 Use these commands in Bash for structural codebase queries:\n\
+                 - `codemap context \"<task>\"` — find the most relevant files for a task (start here)\n\
+                 - `codemap symbol <name>` — find where a symbol is defined and who uses it\n\
+                 - `codemap deps <file>` — imports and importers of a file\n\
+                 - `codemap map` — ranked overview of top files with signatures\n"
+            );
         }
         Commands::Setup {
             no_post_hook,
